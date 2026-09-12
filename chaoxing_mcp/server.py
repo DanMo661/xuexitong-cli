@@ -10,7 +10,7 @@ import functools
 
 from mcp.server.fastmcp import FastMCP
 
-from .client import ChaoxingClient, strip_tags
+from .client import ChaoxingClient, strip_tags, week_in_schedule
 from . import __version__
 
 mcp = FastMCP("chaoxing", instructions=(
@@ -72,8 +72,9 @@ def get_profile() -> str:
 
 
 @mcp.tool()
-def get_schedule() -> str:
-    """查询本学期课表（默认显示当前周）。返回 课程/星期/节次/教室 的可读文本。"""
+def get_schedule(week: int = 0) -> str:
+    """查询本学期课表。week 不传或传 0 显示全部课程（按上课时间排序）；
+    传周数（如 3）则只显示第 3 周有课的课程。返回 课程/星期/节次/教室/老师。"""
     s = _client()
     lg = s.ensure_login()
     if not lg.ok:
@@ -83,11 +84,17 @@ def get_schedule() -> str:
     except Exception as e:
         return f"课表接口请求失败: {_fmt(e)}"
     cur = data["curriculum"]
-    week = cur.get("realCurrentWeek") or cur.get("currentWeek")
-    lines = [f"学期 {cur.get('schoolYear')} 第 {cur.get('semester')} 学期 | 当前第 {week} 周 "
-             f"| 学号用户 {cur.get('userName')}"]
+    week_now = cur.get("realCurrentWeek") or cur.get("currentWeek")
+    head = (f"学期 {cur.get('schoolYear')} 第 {cur.get('semester')} 学期 | "
+            f"当前第 {week_now} 周 | 学号用户 {cur.get('userName')}")
+    if week:
+        head += f" | 筛选：第 {week} 周"
+    lines = [head]
     rows = []
     for les in data["lessons"]:
+        weeks_str = str(les.get("weeks") or "")
+        if week and not week_in_schedule(weeks_str, week):
+            continue
         begin = int(les.get("beginNumber") or 0)
         length = int(les.get("length") or 1)
         rows.append({
@@ -96,14 +103,14 @@ def get_schedule() -> str:
             "节次": (f"第{begin}-{begin + length - 1}节" if length > 1 else f"第{begin}节"),
             "教室": les.get("location") or "",
             "老师": les.get("teacherName") or "",
-            "周次": str(les.get("weeks") or ""),
+            "周次": weeks_str,
         })
     rows.sort(key=lambda x: (_WEEKDAYS.index(x["星期"]),
                              int("".join(ch for ch in x["节次"] if ch.isdigit()) or 0)))
     for r in rows:
         lines.append(f"{r['星期']} {r['节次']:>8} | {r['课名']} | {r['教室']} | {r['老师']} | 周{r['周次']}")
     if not rows:
-        lines.append("（本学期课表为空）")
+        lines.append(f"（第 {week} 周无课）" if week else "（本学期课表为空）")
     return "\n".join(lines)
 
 
@@ -178,8 +185,9 @@ def download_material(course: str, data_id: int, save_dir: str, filename: str = 
 
 @mcp.tool()
 def list_homework(course: str) -> str:
-    """查询某门课的作业列表（作业名/提交状态/完成进度）。
-    course 为课名关键词（如 "数字电路"）。"""
+    """查询某门课的作业列表（序号/作业名/提交状态/完成进度）。
+    course 为课名关键词（如 "数字电路"）。要看某份作业的截止时间和得分，
+    用返回的序号调用 get_homework_detail。"""
     s = _client()
     lg = s.ensure_login()
     if not lg.ok:
@@ -195,9 +203,43 @@ def list_homework(course: str) -> str:
     if data["progress"]:
         lines.append(f"完成进度: {data['progress'][0]}/{data['progress'][1]}")
     for it in data["items"]:
-        lines.append(f"- {it['title']} | {it['status'] or '状态未知'}")
+        lines.append(f"{it['index']:>2}. {it['title']} | {it['status'] or '状态未知'}")
     if not data["items"]:
         lines.append("（本课程暂无作业）")
+    else:
+        lines.append("提示: 需要某份作业的截止时间/得分时，"
+                     "调用 get_homework_detail(course=课名, index=序号)")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_homework_detail(course: str, index: int) -> str:
+    """查询单份作业的详情：题量 / 满分 / 作答起止时间（含截止时间）/ 得分。
+    course 为课名关键词；index 为 list_homework 返回的作业序号（从 1 起）。"""
+    s = _client()
+    lg = s.ensure_login()
+    if not lg.ok:
+        return lg.msg
+    try:
+        found = s.find_course(course)
+        if not found:
+            return f"未找到包含「{course}」的课程，请用 list_courses 查看课名"
+        d = s.fetch_homework_detail(found, index)
+    except IndexError as e:
+        return str(e) + "，请先调用 list_homework 查看有效序号"
+    except Exception as e:
+        return f"查询作业详情失败: {_fmt(e)}"
+    lines = [f"《{found['name']}》作业 {index}: {d['title'] or '?'}",
+             f"状态: {d['status'] or '未知'}"]
+    if d["question_count"] is not None:
+        lines.append(f"题量: {d['question_count']}")
+    if d["full_score"] is not None:
+        lines.append(f"满分: {d['full_score']}")
+    if d["start_time"] or d["deadline"]:
+        lines.append(f"作答时间: {d['start_time'] or '?'} 至 {d['deadline'] or '?'}"
+                     + ("（已截止）" if d["deadline"] else ""))
+    if d["score"] is not None:
+        lines.append(f"得分: {d['score']}")
     return "\n".join(lines)
 
 

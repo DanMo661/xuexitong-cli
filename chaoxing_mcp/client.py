@@ -30,6 +30,7 @@ from Crypto.Util.Padding import pad, unpad
 TIMEOUT = 20.0            # 常规接口超时（秒）
 DOWNLOAD_TIMEOUT = (10.0, 120.0)  # 下载：(连接, 读取) 分别限时
 LOGIN_STATE_TTL = 300.0   # 登录探测结果缓存 5 分钟，减少每工具一次的探测请求
+COURSES_CACHE_TTL = 300.0  # 课程列表缓存 5 分钟（同一对话内反复查课名免重复拉全页）
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36")
@@ -101,8 +102,8 @@ def parse_courses(html: str) -> list[dict]:
                 teacher = txt
                 break
         courses.append({
-            "name": nm.group(1) if nm else "?",
-            "teacher": teacher,
+            "name": html_mod.unescape(nm.group(1)) if nm else "?",
+            "teacher": html_mod.unescape(teacher),
             "courseid": cid, "clazzid": clazz, "cpi": cpi,
         })
     return courses
@@ -149,6 +150,57 @@ def sanitize_filename(name: str, fallback: str = "download.bin") -> str:
     return (name or fallback)[:120]
 
 
+def week_in_schedule(weeks_str: str, week: int) -> bool:
+    """课表 lessons 的 weeks 字段（"1,2,3" / "1-16" / "1-5,8,10-12"）是否包含 week。"""
+    for part in str(weeks_str or "").split(","):
+        part = part.strip()
+        if "-" in part:
+            a, _, b = part.partition("-")
+            if a.strip().isdigit() and b.strip().isdigit() and int(a) <= week <= int(b):
+                return True
+        elif part.isdigit() and int(part) == week:
+            return True
+    return False
+
+
+def parse_homework_detail(html: str) -> dict:
+    """从作业详情页（mooc-ans/mooc2/work/task）提取结构化信息。
+
+    页面为服务端渲染 + 前端填充混合，strip 后文本形如：
+    "作业详情 实验4 整体调试实验报告 题量: 1 满分: 100
+     作答时间: 06-21 18:51 至 07-01 18:51 智能分析 68 分 ..."
+    解析不到的字段保持 None（不同题型页面结构有差异，尽力而为不报错）。
+    """
+    text = strip_tags(html)
+    out = {"title": None, "question_count": None, "full_score": None,
+           "start_time": None, "deadline": None, "score": None}
+    # 标题夹在最后一个"作业详情"标记与"题量"之间（页面 <title> 也含"作业详情"，
+    # 所以不能直接取第一个标记）
+    m = re.search(r"题量[:：]", text)
+    if m:
+        head = text[:m.start()]
+        k = head.rfind("作业详情")
+        if k >= 0:
+            title = head[k + 4:].strip()
+            if title:
+                out["title"] = title
+    m = re.search(r"题量[:：]\s*(\d+)", text)
+    if m:
+        out["question_count"] = int(m.group(1))
+    m = re.search(r"满分[:：]\s*(\d+)", text)
+    if m:
+        out["full_score"] = int(m.group(1))
+    m = re.search(r"作答时间[:：]\s*(\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})\s*至\s*"
+                  r"(\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})", text)
+    if m:
+        out["start_time"], out["deadline"] = m.group(1), m.group(2)
+    m = (re.search(r"智能分析\s*(\d+(?:\.\d+)?)\s*分", text)
+         or re.search(r"(?:得分|总评|成绩|批阅)[:：]?\s*(\d+(?:\.\d+)?)\s*分", text))
+    if m:
+        out["score"] = m.group(1)
+    return out
+
+
 # ---------------------------------------------------------------- 客户端
 
 @dataclass
@@ -166,13 +218,23 @@ class ChaoxingClient:
     def __init__(self, config_dir: str | None = None,
                  phone: str | None = None, password: str | None = None,
                  timeout: float = TIMEOUT):
-        self.config_dir = config_dir or os.path.dirname(os.path.abspath(__file__))
+        if config_dir is None:
+            # 默认凭据目录：仓库根目录（config.example.json 所在层）优先，
+            # 其次包目录本身——兼容两种放置习惯，向上都不会再远
+            pkg_dir = os.path.dirname(os.path.abspath(__file__))
+            root_dir = os.path.dirname(pkg_dir)
+            config_dir = next(
+                (d for d in (root_dir, pkg_dir)
+                 if os.path.exists(os.path.join(d, "config.json"))), root_dir)
+        self.config_dir = config_dir
         self.config_file = os.path.join(self.config_dir, "config.json")
         self.cookie_file = os.path.join(self.config_dir, "session_cookies.json")
         self.timeout = timeout
         self._explicit_phone = phone
         self._explicit_password = password
         self._login_checked_at = 0.0  # 登录探测缓存时间戳
+        self._courses_cache: list[dict] | None = None
+        self._courses_cache_at = 0.0
         self.session = self._build_session()
 
     # ---------------- 会话与登录 ----------------
@@ -290,8 +352,12 @@ class ChaoxingClient:
 
     # ---------------- 数据接口（返回结构化数据） ----------------
 
-    def fetch_courses(self) -> list[dict]:
-        """我学的课程列表。"""
+    def fetch_courses(self, refresh: bool = False) -> list[dict]:
+        """我学的课程列表（带 5 分钟缓存；refresh=True 强制重新拉取）。"""
+        now = time.time()
+        if (not refresh and self._courses_cache is not None
+                and now - self._courses_cache_at < COURSES_CACHE_TTL):
+            return self._courses_cache
         base = self.get(URL_BASE).text
         m = (re.search(r'"fid"\s*:\s*"?(\d+)"?', base)
              or re.search(r"var fid = '(\d+)'", base))
@@ -299,17 +365,25 @@ class ChaoxingClient:
         r = self.get(URL_COURSELIST, params={
             "courseType": 1, "courseFid": fid,
             "courseTeacherid": 0, "courseOrderBy": 0})
-        return parse_courses(r.text)
+        self._courses_cache = parse_courses(r.text)
+        self._courses_cache_at = now
+        return self._courses_cache
 
     def find_course(self, keyword: str) -> dict | None:
-        """按课名关键词模糊匹配一门课（精确同名者优先）。"""
-        best = None
-        for c in self.fetch_courses():
+        """按课名关键词匹配一门课（精确同名优先，否则取第一个包含者）。
+
+        注意必须先扫精确、再扫包含：若单循环无 break 一路扫到底，
+        best 会被后面的命中覆盖，多门课同名时返回最后一门而非第一门
+        （旧版单文件版就带着这个 bug，v1.1.0 修复）。
+        """
+        courses = self.fetch_courses()
+        for c in courses:
+            if keyword == c["name"]:
+                return c
+        for c in courses:
             if keyword in c["name"]:
-                best = c
-                if keyword == c["name"]:
-                    break
-        return best
+                return c
+        return None
 
     def fetch_course_page(self, c: dict) -> str:
         """课程中间页 HTML（stucoursemiddle），含 enc/openc/workEnc 等隐藏域。"""
@@ -392,7 +466,8 @@ class ChaoxingClient:
         return {"path": path, "size": total}
 
     def fetch_homework(self, c: dict) -> dict:
-        """作业列表：{progress: (done,total)|None, items: [{title,status,url}]}。
+        """作业列表：{progress: (done,total)|None,
+        items: [{index, title, status, url}]}，url 供 fetch_homework_detail 使用。
 
         作业列表的 enc 用课程页隐藏域 workEnc（页面 enc 不通用）。
         """
@@ -415,9 +490,29 @@ class ChaoxingClient:
             r'<p class="overHidden2 fl">([^<]+)</p>[\s\S]*?<p class="status fl">([^<]*)</p>', html)
         return {
             "progress": (int(m_prog.group(1)), int(m_prog.group(2))) if m_prog else None,
-            "items": [{"title": t.strip(), "status": s.strip(), "url": u}
-                      for u, t, s in items],
+            "items": [{"index": i + 1, "title": t.strip(), "status": s.strip(),
+                       "url": unquote(u)}
+                      for i, (u, t, s) in enumerate(items)],
         }
+
+    def fetch_homework_detail(self, c: dict, index: int) -> dict:
+        """按列表序号取单份作业的详情（题量/满分/作答起止时间/得分）。
+
+        详情 URL 来自作业列表条目的 data 属性（work/task 页，带独立 enc，
+        复用列表接口返回的 url 即可，无需再拼签名）。
+        """
+        items = self.fetch_homework(c)["items"]
+        if not 1 <= index <= len(items):
+            raise IndexError(f"作业序号越界：该课程共 {len(items)} 份作业")
+        item = items[index - 1]
+        if not item["url"].startswith("http"):
+            raise RuntimeError("该作业无详情链接（可能未开放）")
+        detail = parse_homework_detail(self.get(item["url"]).text)
+        detail["index"] = index
+        detail["status"] = item["status"]
+        if not detail.get("title"):
+            detail["title"] = item["title"]
+        return detail
 
     def fetch_exams(self) -> list[list[str]]:
         """全校考试安排表（每行已去掉 HTML 标签的单元格文本）。"""

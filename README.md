@@ -4,17 +4,18 @@
 
 全部接口均经真实账号实测验证（2026-09）。
 
-## 工具列表（11 个）
+## 工具列表（12 个）
 
 | 工具 | 功能 | 关键参数 |
 |---|---|---|
-| `login` | 登录并持久化会话 | `phone`, `password` |
+| `login` | 登录并持久化会话 | `phone?`, `password?` |
 | `get_profile` | 个人资料（姓名/学校/uid/fid/学年学期） | 无 |
-| `get_schedule` | 本学期课表（周次/节次/教室/老师） | 无 |
+| `get_schedule` | 本学期课表（周次/节次/教室/老师），可选按周过滤 | `week?` |
 | `list_courses` | 我学的全部课程（含 courseid/clazzid/cpi） | 无 |
 | `list_materials` | 课程资料区文件列表，支持文件夹逐层下钻 | `course`，`folder_data_id?`，`folder_enc?` |
 | `download_material` | 下载资料文件到本地 | `course`, `data_id`, `save_dir`, `filename?` |
-| `list_homework` | 课程作业列表（名称/提交状态/完成进度） | `course` |
+| `list_homework` | 课程作业列表（序号/名称/提交状态/完成进度） | `course` |
+| `get_homework_detail` | 单份作业详情（题量/满分/作答起止时间/得分） | `course`, `index` |
 | `list_exams` | 全校考试安排（时间/时长/状态/分数） | 无 |
 | `list_chapters` | 课程章节树 + 任务点完成进度 | `course` |
 | `list_notices` | 通知中心（作业/考试/教师/学校通知，含未读标记） | `unread_only?`, `limit?` |
@@ -23,11 +24,14 @@
 ### 用法示例
 
 ```text
-用户: 我这周有哪些课？
- → get_schedule()
+用户: 我第 3 周有哪些课？
+ → get_schedule(week=3)
 
 用户: 数字电路这门课还有什么作业没交？
  → list_homework(course="数字电路")
+
+用户: 数字电路作业 1 的截止时间是多久？得了多少分？
+ → get_homework_detail(course="数字电路", index=1)
 
 用户: 马克思的课我学到哪了？
  → list_chapters(course="马克思主义基本原理")
@@ -143,7 +147,9 @@ copy config.example.json config.json   # Linux: cp
 <input type="hidden" id="examEnc" value="..."/>  <!-- 课程考试 tab 专用 -->
 ```
 
-作业列表 `GET mooc1.chaoxing.com/mooc2/work/list?courseId&classId&cpi&ut=s&openc&enc=<workEnc>&t=<毫秒时间戳>&stuenc=<页面enc>&isdisplaytable=2`，**enc 必须用 workEnc 而非页面 enc**，且需要 t 和 stuenc 伴随参数，否则"无权限"。作业条目在 `<li onclick="goTask(this);" data="...">` 里，含名称/状态/跳转 URL。
+作业列表 `GET mooc1.chaoxing.com/mooc2/work/list?courseId&classId&cpi&ut=s&openc&enc=<workEnc>&t=<毫秒时间戳>&stuenc=<页面enc>&isdisplaytable=2`，**enc 必须用 workEnc 而非页面 enc**，且需要 t 和 stuenc 伴随参数，否则"无权限"。作业条目在 `<li onclick="goTask(this);" data="...">` 里，data 属性即详情页直链（带独立 enc）。
+
+作业详情 `GET <data 属性直链>`（形如 `mooc1.chaoxing.com/mooc-ans/mooc2/work/task?courseId&classId&cpi&workId&answerId&enc=...`），服务端渲染含题量/满分/作答起止时间（"作答时间: MM-DD HH:MM 至 MM-DD HH:MM"，后者即截止时间）/得分（"智能分析 NN 分"）。
 
 ### 考试列表
 
@@ -173,11 +179,15 @@ base 页：姓名（`aria-label="账号：X"`）、学校（`#siteName` title）
 
 ## 已知限制
 
-- **成绩单页**：`stat2-ans.chaoxing.com/study-data/index` 对程序化访问返回 403（尝试了页面 enc/oldenc/Referer 组合均被拒），暂无法查询课程成绩统计。替代：考试分数见 `list_exams` 的分数列，作业状态见 `list_homework`。
+- **成绩单页**：`stat2-ans.chaoxing.com/study-data/index` 对程序化访问返回 403（页面 enc/oldenc、Referer 组合均被 WAF 拒绝），暂无法查询课程成绩统计。替代：作业得分见 `get_homework_detail`，考试分数见 `list_exams`。
 - **学号**：个人资料接口已停用，`get_profile` 不含学号。
 - **课程公告**：无独立接口，已并入 `list_notices`（教师通知标题通常带课程名）。
 - **消息（IM）**：`im.chaoxing.com/webim/me` 是 WebSocket 应用，程序化访问返回错误页，未支持。
-- **作业截止时间**：work/list 服务端渲染不含截止时间字段，需要点进作业详情页（其 URL 亦带独立 enc），暂不解析。
+- **错题集**：`/mooc2-ans/wrongque/page` 页面为 JS 动态加载题目，数据接口藏在压缩 JS 中，未解析。
+- **课程讨论区**：`groupweb.chaoxing.com/course/topic/topicList` 需要的请求参数无法从课程页稳定拼出，未支持。
+- **云盘文件下载**：官方前端明示"文件夹/超过 500MB 需客户端下载"，且下载加密串由服务端 JS 生成，仅有列表查询。
+- **作业详情解析**：不同题型（选择题/报告类）详情页结构有差异，`get_homework_detail` 对取不到的字段留空而非报错。
+- **课程匹配**：`course` 参数按课名子串匹配（精确同名优先，否则取第一个命中）。同名课程多时建议先 `list_courses` 用完整课名。
 - 非学历教育/继续教育等特殊账号体系未验证。
 
 ## 项目结构

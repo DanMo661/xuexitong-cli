@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from chaoxing_mcp.client import (  # noqa: E402
     aes_encrypt, aes_decrypt, hidden_value, parse_cd_filename,
-    parse_courses, parse_materials, sanitize_filename, strip_tags,
+    parse_courses, parse_homework_detail, parse_materials,
+    sanitize_filename, strip_tags, week_in_schedule,
 )
 
 # ---------------------------------------------------------------- AES 加解密
@@ -104,6 +105,42 @@ def test_sanitize_filename():
     assert sanitize_filename("") == "download.bin"
     assert sanitize_filename("...") == "download.bin"
     assert len(sanitize_filename("长" * 500)) <= 120
+
+
+def test_week_in_schedule():
+    assert week_in_schedule("1,2,3", 2)
+    assert not week_in_schedule("1,2,3", 4)
+    assert week_in_schedule("1-16", 16)
+    assert not week_in_schedule("1-16", 17)
+    assert week_in_schedule("1-5,8,10-12", 11)
+    assert week_in_schedule("1-5,8,10-12", 8)
+    assert not week_in_schedule("1-5,8,10-12", 6)
+    # 容错：空/乱格式不抛异常
+    assert not week_in_schedule("", 1)
+    assert not week_in_schedule("abc", 1)
+
+
+HOMEWORK_DETAIL_HTML = """
+<html><head><title>作业详情</title></head><body>
+<div>作业详情</div> <h2>实验4 整体调试实验报告</h2>
+<span>题量: 1</span> <span>满分: 100</span>
+<span>作答时间: 06-21 18:51 至 07-01 18:51</span>
+<div>智能分析 68 分</div>
+</body></html>
+"""
+
+
+def test_parse_homework_detail():
+    d = parse_homework_detail(HOMEWORK_DETAIL_HTML)
+    assert d["title"] == "实验4 整体调试实验报告"
+    assert d["question_count"] == 1
+    assert d["full_score"] == 100
+    assert d["start_time"] == "06-21 18:51"
+    assert d["deadline"] == "07-01 18:51"
+    assert d["score"] == "68"
+    # 空页面不抛异常，字段为 None
+    d2 = parse_homework_detail("<html></html>")
+    assert d2["title"] is None and d2["deadline"] is None
 
 
 def run_all() -> int:
