@@ -15,3 +15,4 @@ build/
 # 探索/调试脚本
 _explore/
 widget_pos.json
+widget_config.json
