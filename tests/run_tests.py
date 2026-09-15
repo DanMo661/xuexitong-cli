@@ -18,7 +18,8 @@ from chaoxing_mcp.client import (  # noqa: E402
     parse_homework_detail, parse_materials, parse_section_times,
     sanitize_filename, strip_tags, week_in_schedule,
 )
-from datetime import date  # noqa: E402
+from chaoxing_mcp.widget import fmt_countdown, lesson_rows, pick_current_next  # noqa: E402
+from datetime import date, datetime, timedelta  # noqa: E402
 
 # ---------------------------------------------------------------- AES 加解密
 
@@ -217,6 +218,38 @@ def test_escape_ics():
     assert escape_ics("a;b,c") == r"a\;b\,c"
     assert escape_ics("行1\n行2") == r"行1\n行2"
     assert escape_ics(" back \\ slash") == " back \\\\ slash"
+
+
+def test_widget_helpers():
+    # 今天的课：第 1 周周二（2026-09-01）第 1-2 节 8:00-9:50
+    curriculum = {
+        "firstWeekDate": 1788105600000,
+        "lessonTimeConfigArray": ["8:00-8:50", "9:00-9:50", "10:10-11:00"],
+    }
+    lessons = [{"name": "数字信号处理", "location": "北主楼402", "teacherName": "张",
+                "dayOfWeek": 2, "beginNumber": 1, "length": 2}]
+    rows = lesson_rows(lessons, curriculum, 1, date(2026, 9, 1))
+    assert len(rows) == 1
+    assert rows[0]["start"] == datetime(2026, 9, 1, 8, 0)
+    assert rows[0]["end"] == datetime(2026, 9, 1, 9, 50)
+    # 不是今天的课（周三）查不到
+    assert lesson_rows(lessons, curriculum, 1, date(2026, 9, 2)) == []
+    # 缺关键字段返回空列表不抛异常
+    assert lesson_rows(lessons, {}, 1, date(2026, 9, 1)) == []
+    # 正在上/下一节判定
+    cur, nxt = pick_current_next(rows, datetime(2026, 9, 1, 8, 30))
+    assert cur is rows[0] and nxt is None
+    cur, nxt = pick_current_next(rows, datetime(2026, 9, 1, 7, 30))
+    assert cur is None and nxt is rows[0]
+    cur, nxt = pick_current_next(rows, datetime(2026, 9, 1, 11, 0))
+    assert cur is None and nxt is None
+
+    # 倒计时文案
+    assert fmt_countdown(timedelta(minutes=45)) == "45 分钟"
+    assert fmt_countdown(timedelta(hours=3)) == "3 小时"
+    assert fmt_countdown(timedelta(hours=3, minutes=5)) == "3 小时 05 分"
+    assert fmt_countdown(timedelta(days=1, hours=3)) == "1 天 3 小时"
+    assert fmt_countdown(timedelta(minutes=-2)) == "已过期"
 
 
 def test_build_ics():

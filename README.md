@@ -1,6 +1,6 @@
 # chaoxing-mcp
 
-学习通（超星）MCP Server —— 把你的课表（含 .ics 日历导出）、作业截止、考试、章节进度、通知、云盘接进任意 MCP 客户端（ZCode / Claude Desktop / Cursor 等）。
+学习通（超星）MCP Server + 桌面悬浮窗 —— 把你的课表（含 .ics 日历导出）、作业截止、考试、章节进度、通知、云盘接进任意 MCP 客户端（ZCode / Claude Desktop / Cursor 等），或在桌面上挂一个常驻课表悬浮窗。
 
 全部接口均经真实账号实测验证（2026-09）。
 
@@ -97,6 +97,22 @@ copy config.example.json config.json   # Linux: cp
 ```
 
 外层按客户端惯例包一层：ZCode 写在 `~/.zcode/cli/config.json` 的 `mcp.servers` 下，Claude Desktop 写在 `claude_desktop_config.json` 的 `mcpServers` 下。Windows 下 `command` 建议写 python 绝对路径（如 `D:/Python/python.exe`）。
+
+## 桌面悬浮窗（可选，零新增依赖）
+
+不想开对话时，可以直接在桌面上挂一个常驻悬浮窗（tkinter 标准库实现，参考 TrafficMonitor 等悬浮窗工具的风格：置顶半透明深色圆角卡片）：
+
+```bash
+python -m chaoxing_mcp.widget       # 或 pip install . 后运行 chaoxing-widget
+```
+
+Windows 下双击仓库根目录的 `启动悬浮窗.bat` 即可（用 pythonw 启动，无控制台窗口）。
+
+- **收起态**：状态点 + 下一节课（倒计时）/ 正在上课 + 待交作业数，卡片约 316px 宽
+- **点击卡片展开**：今日课程逐节（含上下课时刻与教室）、待交作业倒计时（临近截止变黄、已过期变红）、最新 3 条通知
+- **交互**：拖动移动（位置自动记忆）、`↻` 手动刷新、右键菜单（刷新/展开收起/置顶/退出）
+- **对账号友好**：课表秒出；作业截止需全课程逐课扫描（约 1 分钟，期间显示"扫描中"），自动刷新默认 30 分钟一次，全部只读查询
+- 凭据与 MCP 共用同一套 `config.json` / 环境变量，登录状态互通
 
 ## 会话与安全设计
 
@@ -218,10 +234,12 @@ base 页：姓名（`aria-label="账号：X"`）、学校（`#siteName` title）
 chaoxing_mcp/
 ├── client.py    # 接口层：会话 / 登录 / 重试 / 页面解析（返回结构化数据）
 ├── server.py    # MCP 工具层：结构化数据 → 可读文本
+├── widget.py    # 桌面悬浮窗（可选，tkinter 标准库，零新增依赖）
 └── __main__.py  # python -m chaoxing_mcp 入口
 chaoxing_server.py  # 兼容旧配置的直接运行入口
+启动悬浮窗.bat      # Windows 双击启动悬浮窗（pythonw，无控制台）
 tests/run_tests.py  # 纯逻辑单测（零依赖：python tests/run_tests.py，也兼容 pytest）
-pyproject.toml      # pip install . 打包配置
+pyproject.toml      # pip install . 打包配置（chaoxing-mcp / chaoxing-widget 两个命令）
 ```
 
 ## License
