@@ -22,6 +22,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib.parse import unquote
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 
@@ -31,6 +32,9 @@ TIMEOUT = 20.0            # 常规接口超时（秒）
 DOWNLOAD_TIMEOUT = (10.0, 120.0)  # 下载：(连接, 读取) 分别限时
 LOGIN_STATE_TTL = 300.0   # 登录探测结果缓存 5 分钟，减少每工具一次的探测请求
 COURSES_CACHE_TTL = 300.0  # 课程列表缓存 5 分钟（同一对话内反复查课名免重复拉全页）
+HOMEWORK_CACHE_TTL = 120.0  # 单课作业列表缓存 2 分钟（截止看板会连查多课，重复调用免重拉）
+SCHEDULE_FULL_TTL = 600.0   # 全学期课表（逐周合并）缓存 10 分钟（一次要拉 ~20 周数据）
+_TZ_CN = timezone(timedelta(hours=8))  # 学习通时间戳均为北京时间
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36")
@@ -201,6 +205,134 @@ def parse_homework_detail(html: str) -> dict:
     return out
 
 
+def expand_weeks(weeks_str: str) -> list[int]:
+    """课表 weeks 字段展开为周数列表（"1,2,3" / "1-16" / "1-5,8,10-12"）。"""
+    weeks: list[int] = []
+    for part in str(weeks_str or "").split(","):
+        part = part.strip()
+        if "-" in part:
+            a, _, b = part.partition("-")
+            if a.strip().isdigit() and b.strip().isdigit():
+                weeks.extend(range(int(a), int(b) + 1))
+        elif part.isdigit():
+            weeks.append(int(part))
+    return sorted(set(weeks))
+
+
+def compress_weeks(weeks) -> str:
+    """expand_weeks 的逆运算：[1,2,3,5,8,9] → "1-3,5,8-9"。
+    全学期逐周合并课表时，把重复出现的同一节课压回周次串。"""
+    out: list[str] = []
+    start = prev = None
+    for w in sorted({int(x) for x in weeks}):
+        if prev is not None and w == prev + 1:
+            out[-1] = f"{start}-{w}"
+        else:
+            start = w
+            out.append(str(w))
+        prev = w
+    return ",".join(out)
+
+
+def ms_to_date(ms) -> date:
+    """毫秒时间戳 → 北京时间日期（课表 firstWeekDate 等服务端时间戳均为北京时区）。"""
+    return datetime.fromtimestamp(int(ms) / 1000, tz=_TZ_CN).date()
+
+
+def parse_section_times(config_array) -> list[tuple[dtime, dtime]]:
+    """curriculum.lessonTimeConfigArray（["8:00-8:50", ...]）→ 按节次排列的
+    [(上课时间, 下课时间)]，是学校真实节次表，供日历导出与日期显示使用。"""
+    out: list[tuple[dtime, dtime]] = []
+    for item in config_array or []:
+        m = re.match(r"(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})", str(item).strip())
+        if m:
+            h1, m1, h2, m2 = map(int, m.groups())
+            out.append((dtime(h1, m1), dtime(h2, m2)))
+    return out
+
+
+def nearest_datetime_for(month_day: str, today: date) -> datetime | None:
+    """作业详情的作答时间只有"MM-DD HH:MM"、没有年份。
+
+    取与今天最接近的年份（去年/今年/明年三选一）补全，跨年作业
+    （12 月留的作业 1 月截止）才能排对顺序。解析失败返回 None。
+    """
+    m = re.match(r"(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})", str(month_day).strip())
+    if not m:
+        return None
+    mo, d, hh, mm = map(int, m.groups())
+    best: datetime | None = None
+    for year in (today.year - 1, today.year, today.year + 1):
+        try:
+            cand = datetime(year, mo, d, hh, mm)
+        except ValueError:  # 2月30日之类的不存在日期
+            continue
+        if best is None or abs((cand.date() - today).days) < abs((best.date() - today).days):
+            best = cand
+    return best
+
+
+_DONE_MARKS = ("已完成", "已提交", "待批阅", "已批阅", "已批改")
+
+
+def is_homework_pending(status: str) -> bool:
+    """作业是否"还没交/需要关注"：已完成与已提交（待批阅/已批阅）不算；
+    待提交、未提交、进行中、已截止（未交）、空状态都算。"""
+    s = (status or "").strip()
+    return not any(mark in s for mark in _DONE_MARKS)
+
+
+def escape_ics(text: str) -> str:
+    """RFC 5545 文本转义（反斜杠/分号/逗号/换行）。"""
+    return (str(text).replace("\\", "\\\\").replace(";", "\\;")
+            .replace(",", "\\,").replace("\n", "\\n"))
+
+
+def build_ics(lessons: list[dict], curriculum: dict, cal_name: str = "课表") -> str:
+    """学期课表 → RFC 5545 iCalendar 文本（CRLF 行尾，浮动本地时间）。
+
+    日期来自 curriculum.firstWeekDate（第 1 周周一，毫秒时间戳），上课/
+    下课钟点来自 curriculum.lessonTimeConfigArray（学校真实节次表）——
+    全是服务端下发的数据，不本地猜时间。每节课自带 30 分钟前提醒。
+    """
+    first = curriculum.get("firstWeekDate") or curriculum.get("firstWeekDateReal")
+    if not first:
+        raise RuntimeError("课表缺少 firstWeekDate，无法确定学期起始日期")
+    first_monday = ms_to_date(first)
+    section_times = parse_section_times(curriculum.get("lessonTimeConfigArray"))
+    if not section_times:
+        raise RuntimeError("课表缺少 lessonTimeConfigArray（节次时间表），无法确定上下课时间")
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0",
+             "PRODID:-//chaoxing-mcp//schedule//CN",
+             f"X-WR-CALNAME:{escape_ics(cal_name)}"]
+    for les in lessons:
+        begin = int(les.get("beginNumber") or 1)
+        length = int(les.get("length") or 1)
+        if begin < 1 or begin > len(section_times):
+            continue
+        start_t = section_times[begin - 1][0]
+        end_t = section_times[min(begin + length - 2, len(section_times) - 1)][1]
+        name = les.get("name") or les.get("displayCourseName") or "课程"
+        where = les.get("location") or les.get("onlineLocation") or "待定"
+        dow = int(les.get("dayOfWeek") or 1)
+        for w in expand_weeks(les.get("weeks")):
+            day = first_monday + timedelta(days=(w - 1) * 7 + dow - 1)
+            uid = f"{les.get('lessonId') or 'l'}-{begin}-{w}@chaoxing-mcp"
+            lines += ["BEGIN:VEVENT",
+                      f"UID:{uid}",
+                      f"SUMMARY:{escape_ics(name)}",
+                      f"DTSTART:{day:%Y%m%d}T{start_t:%H%M}00",
+                      f"DTEND:{day:%Y%m%d}T{end_t:%H%M}00",
+                      f"LOCATION:{escape_ics(where)}",
+                      f"DESCRIPTION:{escape_ics(les.get('teacherName') or '')} "
+                      f"第{begin}-{begin + length - 1}节 第{w}周",
+                      "BEGIN:VALARM", "TRIGGER:-PT30M", "ACTION:DISPLAY",
+                      "DESCRIPTION:30分钟后上课", "END:VALARM",
+                      "END:VEVENT"]
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines)
+
+
 # ---------------------------------------------------------------- 客户端
 
 @dataclass
@@ -235,6 +367,9 @@ class ChaoxingClient:
         self._login_checked_at = 0.0  # 登录探测缓存时间戳
         self._courses_cache: list[dict] | None = None
         self._courses_cache_at = 0.0
+        self._hw_cache: dict[tuple, tuple[float, dict]] = {}  # (courseid, clazzid) → (时刻, 数据)
+        self._sched_full_cache: dict | None = None
+        self._sched_full_cache_at = 0.0
         self.session = self._build_session()
 
     # ---------------- 会话与登录 ----------------
@@ -415,14 +550,67 @@ class ChaoxingClient:
             pass
         return profile
 
-    def fetch_schedule(self) -> dict:
-        """本学期课表：{curriculum: {...}, lessons: [...]}。"""
-        j = self.post(URL_SCHEDULE, data={}).json()
+    def fetch_schedule(self, week: int | None = None) -> dict:
+        """课表：{curriculum: {...}, lessons: [...]}。
+
+        关键协议：getMyLessons 不带参数只返回"当前周"的课（每条的 weeks
+        就是当前周数，不是全学期！），带 {"week": N} 才返回第 N 周的课。
+        week=None 走默认（当前周）。
+
+        另注意 dayOfWeek 为 1 基（1=周一 … 7=周日），服务端下发的 day
+        字段（首周日期）可交叉验证。
+        """
+        data = {"week": week} if week else {}
+        j = self.post(URL_SCHEDULE, data=data).json()
         if j.get("result") != 1:
             raise RuntimeError("课表接口返回失败: " + str(j.get("msg")))
-        data = j.get("data") or {}
-        return {"curriculum": data.get("curriculum") or {},
-                "lessons": data.get("lessonArray") or []}
+        body = j.get("data") or {}
+        return {"curriculum": body.get("curriculum") or {},
+                "lessons": body.get("lessonArray") or []}
+
+    def fetch_schedule_full(self, refresh: bool = False,
+                            max_empty_streak: int = 4) -> dict:
+        """全学期课表：逐周调 fetch_schedule(week) 合并同一节课的各周出现。
+
+        每周响应里同一节课只会出现一次且 weeks=该周数，所以按
+        (lessonId, dayOfWeek, beginNumber, length, 教室, 老师) 聚合，
+        把周数压缩回 "1-16" 串；教室/老师中途变动的课会自然拆成多行。
+        连续 max_empty_streak 周无课即认定学期结束，提前止损；
+        结果缓存 10 分钟。
+        """
+        now = time.time()
+        if not refresh and self._sched_full_cache is not None \
+                and now - self._sched_full_cache_at < SCHEDULE_FULL_TTL:
+            return self._sched_full_cache
+        cur = self.fetch_schedule()["curriculum"]
+        max_week = min(int(cur.get("maxWeek") or 25), 30)
+        merged: dict[tuple, dict] = {}
+        empty_streak = 0
+        for w in range(1, max_week + 1):
+            lessons = self.fetch_schedule(w)["lessons"]
+            if not lessons:
+                empty_streak += 1
+                if empty_streak >= max_empty_streak:
+                    break
+                continue
+            empty_streak = 0
+            for les in lessons:
+                key = (les.get("lessonId"), les.get("dayOfWeek"),
+                       les.get("beginNumber"), les.get("length"),
+                       les.get("location") or "", les.get("teacherName") or "",
+                       les.get("name") or "")
+                if key in merged:
+                    merged[key]["_weeknums"].append(w)
+                else:
+                    item = dict(les)
+                    item["_weeknums"] = [w]
+                    merged[key] = item
+        for item in merged.values():
+            item["weeks"] = compress_weeks(item.pop("_weeknums"))
+        result = {"curriculum": cur, "lessons": list(merged.values())}
+        self._sched_full_cache = result
+        self._sched_full_cache_at = now
+        return result
 
     def fetch_materials(self, c: dict, folder_data_id: int = 0, folder_enc: str = "") -> list[dict]:
         """课程资料区文件列表（folder_data_id+folder_enc 下钻子文件夹）。"""
@@ -432,6 +620,41 @@ class ChaoxingClient:
             params.update({"dataId": folder_data_id, "enc": folder_enc})
         r = self.get(URL_DATALIST, params=params)
         return parse_materials(r.text)
+
+    def fetch_materials_recursive(self, c: dict, keyword: str,
+                                  max_depth: int = 2) -> list[dict]:
+        """资料区递归搜索：文件/文件夹名含 keyword（不分大小写）即命中。
+
+        返回 [{path, type, name, data_id, enc}]，path 形如 "子目录/文件名"，
+        上限 50 条；访问过的文件夹记 visited 防环。max_depth 为下钻层数
+        （1=只看第一层）。
+        """
+        kw = keyword.strip().casefold()
+        hits: list[dict] = []
+        visited: set[tuple] = set()
+
+        def walk(folder_id: int, enc: str, prefix: str, depth: int) -> None:
+            if depth > max_depth or len(hits) >= 50:
+                return
+            key = (folder_id, enc)
+            if key in visited:
+                return
+            visited.add(key)
+            try:
+                items = self.fetch_materials(c, folder_id, enc)
+            except Exception:
+                return  # 个别文件夹无权限不影响整体搜索
+            for it in items:
+                path = f"{prefix}{it['name']}"
+                if kw in path.casefold() and len(hits) < 50:
+                    hit = dict(it)
+                    hit["path"] = path
+                    hits.append(hit)
+                if it["type"] == "afolder":
+                    walk(it["data_id"], it["enc"], f"{path}/", depth + 1)
+
+        walk(0, "", "", 1)
+        return hits
 
     def download_material(self, c: dict, data_id: int, save_dir: str,
                           filename: str = "") -> dict:
@@ -465,12 +688,18 @@ class ChaoxingClient:
                         total += len(chunk)
         return {"path": path, "size": total}
 
-    def fetch_homework(self, c: dict) -> dict:
+    def fetch_homework(self, c: dict, refresh: bool = False) -> dict:
         """作业列表：{progress: (done,total)|None,
         items: [{index, title, status, url}]}，url 供 fetch_homework_detail 使用。
 
         作业列表的 enc 用课程页隐藏域 workEnc（页面 enc 不通用）。
+        结果缓存 2 分钟（截止看板逐课连查、重复调用时免重拉），refresh=True 强制刷新。
         """
+        key = (c["courseid"], c["clazzid"])
+        now = time.time()
+        cached = self._hw_cache.get(key)
+        if not refresh and cached and now - cached[0] < HOMEWORK_CACHE_TTL:
+            return cached[1]
         page = self.fetch_course_page(c)
         work_enc = hidden_value(page, "workEnc")
         openc = hidden_value(page, "openc")
@@ -488,12 +717,14 @@ class ChaoxingClient:
         items = re.findall(
             r'<li onclick="goTask\(this\);" data="([^"]+)"[\s\S]*?'
             r'<p class="overHidden2 fl">([^<]+)</p>[\s\S]*?<p class="status fl">([^<]*)</p>', html)
-        return {
+        result = {
             "progress": (int(m_prog.group(1)), int(m_prog.group(2))) if m_prog else None,
             "items": [{"index": i + 1, "title": t.strip(), "status": s.strip(),
                        "url": unquote(u)}
                       for i, (u, t, s) in enumerate(items)],
         }
+        self._hw_cache[key] = (now, result)
+        return result
 
     def fetch_homework_detail(self, c: dict, index: int) -> dict:
         """按列表序号取单份作业的详情（题量/满分/作答起止时间/得分）。
@@ -514,6 +745,74 @@ class ChaoxingClient:
             detail["title"] = item["title"]
         return detail
 
+    def fetch_deadline_overview(self, course: str | None = None,
+                                horizon_days: int = 90) -> list[dict]:
+        """全部（或 course 指定一门）课程的未完成作业 → 截止看板数据。
+
+        截止时间只在作业详情页上，因此逐份请求详情页；为控制请求数，
+        已完成/已提交（待批阅）的直接跳过，只对未提交的取详情。
+        返回按"未来（近→远）→ 已过期（最久→最近）→ 截止未知"排序的行；
+        horizon_days 只收未来 N 天内截止的（已过期与截止未知始终保留）。
+        """
+        if course:
+            found = self.find_course(course)
+            if not found:
+                raise RuntimeError(f"未找到包含「{course}」的课程")
+            courses = [found]
+        else:
+            courses = self.fetch_courses()
+        today = datetime.now(_TZ_CN).date()
+        horizon = today + timedelta(days=max(1, horizon_days))
+        rows: list[dict] = []
+        for co in courses:
+            try:
+                hw = self.fetch_homework(co)
+            except Exception:
+                continue  # 未开放作业功能的课（无 workEnc）直接跳过
+            for it in hw["items"]:
+                if not is_homework_pending(it["status"]):
+                    continue
+                row = {"course": co["name"], "title": it["title"],
+                       "status": it["status"] or "未知",
+                       "deadline": None, "deadline_dt": None}
+                if it["url"].startswith("http"):
+                    try:
+                        detail = parse_homework_detail(self.get(it["url"]).text)
+                        row["deadline"] = detail["deadline"]
+                        if detail["deadline"]:
+                            row["deadline_dt"] = nearest_datetime_for(
+                                detail["deadline"], today)
+                    except Exception:
+                        pass  # 详情页拉不到就标记"截止未知"，不中断看板
+                rows.append(row)
+
+        def sort_key(r: dict):
+            dt = r["deadline_dt"]
+            if dt is None:
+                return (2, datetime(9999, 12, 31))
+            return (1 if dt.date() < today else 0, dt)
+
+        rows.sort(key=sort_key)
+        return [r for r in rows
+                if r["deadline_dt"] is None or r["deadline_dt"].date() <= horizon]
+
+    def fetch_progress_overview(self) -> list[dict]:
+        """全部课程的章节任务点完成进度一览（逐课查询，逐课容错，
+        未开放章节功能的课记 error 而不是让整个看板失败）。"""
+        out: list[dict] = []
+        for co in self.fetch_courses():
+            row = {"course": co["name"], "done": None, "total": None, "error": None}
+            try:
+                data = self.fetch_chapters(co, with_nodes=False)
+                if data["progress"]:
+                    row["done"], row["total"] = data["progress"]
+                else:
+                    row["error"] = "无进度数据"
+            except Exception as e:
+                row["error"] = " ".join(str(e).split())[:60]
+            out.append(row)
+        return out
+
     def fetch_exams(self) -> list[list[str]]:
         """全校考试安排表（每行已去掉 HTML 标签的单元格文本）。"""
         r = self.get(URL_EXAMLIST)
@@ -525,9 +824,10 @@ class ChaoxingClient:
                 rows.append(tds)
         return rows
 
-    def fetch_chapters(self, c: dict) -> dict:
+    def fetch_chapters(self, c: dict, with_nodes: bool = True) -> dict:
         """章节与任务点进度：{progress: (done,total)|None,
-        nodes: [(level, text)]，level 0=一级章 1=二级小节}。"""
+        nodes: [(level, text)]，level 0=一级章 1=二级小节}。
+        with_nodes=False 只取总进度（全课程进度总览用，跳过节点解析）。"""
         page = self.fetch_course_page(c)
         page_enc = hidden_value(page, "enc")
         openc = hidden_value(page, "openc")
@@ -542,6 +842,8 @@ class ChaoxingClient:
         m_prog = re.search(r"已完成任务点:\s*<span[^>]*>(\d+)</span>/(\d+)", html)
         if m_prog:
             progress = (int(m_prog.group(1)), int(m_prog.group(2)))
+        if not with_nodes:
+            return {"progress": progress, "nodes": []}
         nodes: list[tuple[int, str]] = []
         # 一级章节（带序号的大章）
         chapter_titles = {}
@@ -574,9 +876,26 @@ class ChaoxingClient:
         nodes = [(lvl, text) for _, lvl, text in sorted(events)]
         return {"progress": progress, "nodes": nodes}
 
-    def fetch_notices(self, limit: int = 20, unread_only: bool = False) -> list[dict]:
-        """通知中心列表（按 limit 翻页拉取，最多 5 页）。"""
-        items, last_id = [], ""
+    def fetch_notices(self, limit: int = 20, unread_only: bool = False,
+                      keyword: str = "") -> list[dict]:
+        """通知中心列表（最多翻 5 页 ≈ 100 条，列表 content 字段就是全文，
+        无需再请求详情页）。
+
+        keyword 为客户端过滤（服务端 kw 参数实测无效，传了也全量返回）；
+        unread_only=True 只留未读。带 keyword/unread 过滤时会自动多翻页，
+        直到凑满 limit 条"过滤后命中"或翻满 5 页。
+        """
+        kw = (keyword or "").strip()
+
+        def match(it: dict) -> bool:
+            if unread_only and it.get("isread"):
+                return False
+            if kw and kw not in ((it.get("title") or "") + (it.get("content") or "")):
+                return False
+            return True
+
+        items: list[dict] = []
+        last_id = ""
         for _ in range(5):
             r = self.post(URL_NOTICELIST, data={
                 "type": 0, "notice_type": 0, "lastValue": last_id, "sort": 0,
@@ -590,11 +909,10 @@ class ChaoxingClient:
             page_items = data.get("list") or []
             items.extend(page_items)
             last_id = data.get("lastGetId") or ""
-            if not page_items or data.get("lastPage") or len(items) >= limit:
+            hits = sum(1 for it in items if match(it))
+            if not page_items or data.get("lastPage") or hits >= limit:
                 break
-        if unread_only:
-            items = [it for it in items if not it.get("isread")]
-        return items[:limit]
+        return [it for it in items if match(it)][:limit]
 
     def fetch_pan_files(self, folder_id: str = "") -> dict:
         """个人云盘文件列表：{where, total, items: [{kind,name,size,id}]}。

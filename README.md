@@ -1,31 +1,44 @@
 # chaoxing-mcp
 
-学习通（超星）MCP Server —— 把你的课表、作业、考试、章节进度、通知、云盘接进任意 MCP 客户端（ZCode / Claude Desktop / Cursor 等）。
+学习通（超星）MCP Server —— 把你的课表（含 .ics 日历导出）、作业截止、考试、章节进度、通知、云盘接进任意 MCP 客户端（ZCode / Claude Desktop / Cursor 等）。
 
 全部接口均经真实账号实测验证（2026-09）。
 
-## 工具列表（12 个）
+## 工具列表（16 个）
 
 | 工具 | 功能 | 关键参数 |
 |---|---|---|
 | `login` | 登录并持久化会话 | `phone?`, `password?` |
 | `get_profile` | 个人资料（姓名/学校/uid/fid/学年学期） | 无 |
-| `get_schedule` | 本学期课表（周次/节次/教室/老师），可选按周过滤 | `week?` |
+| `get_schedule` | 课表；传 `week` 看某一周（含真实日期），不传看全学期汇总 | `week?` |
+| `export_schedule_ics` | 全学期课表导出 .ics 日历（学校真实节次时间，含课前 30 分钟提醒） | `save_dir`, `filename?` |
 | `list_courses` | 我学的全部课程（含 courseid/clazzid/cpi） | 无 |
 | `list_materials` | 课程资料区文件列表，支持文件夹逐层下钻 | `course`，`folder_data_id?`，`folder_enc?` |
+| `find_materials` | 资料区按关键词递归搜索（免一层层翻文件夹） | `course`, `keyword`, `max_depth?` |
 | `download_material` | 下载资料文件到本地 | `course`, `data_id`, `save_dir`, `filename?` |
 | `list_homework` | 课程作业列表（序号/名称/提交状态/完成进度） | `course` |
 | `get_homework_detail` | 单份作业详情（题量/满分/作答起止时间/得分） | `course`, `index` |
+| `get_homework_deadlines` | 全课程未交作业截止看板（未来→已过期排序；逐份查详情，稍慢） | `course?`, `horizon_days?` |
 | `list_exams` | 全校考试安排（时间/时长/状态/分数） | 无 |
 | `list_chapters` | 课程章节树 + 任务点完成进度 | `course` |
-| `list_notices` | 通知中心（作业/考试/教师/学校通知，含未读标记） | `unread_only?`, `limit?` |
+| `get_progress_overview` | 全课程任务点进度一览（未完成多的在前；逐课查询，稍慢） | 无 |
+| `list_notices` | 通知中心（支持关键词过滤/未读过滤，正文摘要 160 字） | `unread_only?`, `limit?`, `keyword?` |
 | `list_pan_files` | 个人云盘文件列表，支持文件夹下钻 | `folder_id?` |
 
 ### 用法示例
 
 ```text
-用户: 我第 3 周有哪些课？
- → get_schedule(week=3)
+用户: 我第 3 周有哪些课？星期几上课？
+ → get_schedule(week=3)        # 每个安排带真实日期（如 09-16 周三）
+
+用户: 把这学期课表导进手机日历
+ → export_schedule_ics(save_dir="D:\\课件")   # 得到 .ics，导入日历 App 即可
+
+用户: 最近有什么要交的作业？哪个最急？
+ → get_homework_deadlines()    # 按截止时间排序，已过期的单独标出
+
+用户: 哪门课还有任务点没刷完？
+ → get_progress_overview()     # 未完成多的排前面
 
 用户: 数字电路这门课还有什么作业没交？
  → list_homework(course="数字电路")
@@ -33,12 +46,11 @@
 用户: 数字电路作业 1 的截止时间是多久？得了多少分？
  → get_homework_detail(course="数字电路", index=1)
 
-用户: 马克思的课我学到哪了？
- → list_chapters(course="马克思主义基本原理")
-   → 总进度: 已完成任务点 0/26（0%）……
+用户: 找一下实验报告模板在资料区哪个位置
+ → find_materials(course="数字电路", keyword="报告")
 
-用户: 有什么新通知？
- → list_notices(unread_only=true, limit=10)
+用户: 搜一下通知里提到"考试"的
+ → list_notices(keyword="考试")
 
 用户: 把老师传的课件下载到 D:\课件
  → list_materials(course="数字电路") → download_material(course="数字电路", data_id=..., save_dir="D:\\课件")
@@ -126,6 +138,11 @@ copy config.example.json config.json   # Linux: cp
 
 `POST https://kb.chaoxing.com/pc/curriculum/getMyLessons` → `data.lessonArray`（课名=name、教室=location、老师=teacherName、节次=beginNumber+length、星期=dayOfWeek）。
 
+两个关键坑（均实测验证）：
+
+- **不带参数只返回"当前周"的课**——每条的 `weeks` 就是当前周数（如 "3"），不是全学期！要查别的周必须带 form 参数 `{"week": N}`（`currentWeek`/`queryWeek`/`weekNum` 均无效）。全学期视图 = 逐周 `week=1..maxWeek` 拉取后按 (lessonId, 星期, 节次, 教室, 老师) 聚合，周数压缩回 "1-16" 串。
+- **dayOfWeek 是 1 基**（1=周一 … 7=周日）。`data.curriculum.firstWeekDate`（毫秒时间戳，第 1 周周一 00:00 北京时间）+ `dayOfWeek-1` 天即为某周某课的真实日期；该字段与 `lessonTimeConfigArray`（学校真实节次表，`"8:00-8:50"` 形式）是 .ics 导出时间的直接来源，无需本地猜测。
+
 ### 课程列表
 
 `GET mooc2-ans.chaoxing.com/mooc2-ans/visit/courselistdata?courseType=1&courseFid=<fid>`；课名在链接**后方**的 `course-name` span 的 title 里。fid 从 base 页 JS 变量提取。
@@ -167,6 +184,9 @@ copy config.example.json config.json   # Linux: cp
 
 `POST https://notice.chaoxing.com/pc/notice/getNoticeList`，form 参数 type/notice_type/lastValue/sort 等，游标翻页用返回的 `notices.lastGetId`。条目字段：title/content/createrName/completeTime/isread。
 
+- 列表里的 `content` 字段**就是全文**（含换行与链接），无需再请求详情页。
+- form 里的 `kw` 参数**实测无效**（传了照旧全量返回），关键词搜索只能在客户端对 title+content 过滤，搜索范围即翻页拉到的最近约 100 条。
+
 ### 云盘
 
 `GET https://pan-yz.cldisk.com/pcuserpan/index` 页面里的 JS 常量：`const encstr`、`const rootdir`、`const currentPuid`。列表 API：`GET pan-yz.cldisk.com/opt/listres?puid&shareid=0&parentId=<rootdir或文件夹id>&page=1&size=100&enc=<encstr>`（带 Referer）。返回 `list[]`（isfile/name/filesize/id）与 `totalCount`。encstr 含时间戳签名，每次会话需重新从 index 页提取。
@@ -187,6 +207,8 @@ base 页：姓名（`aria-label="账号：X"`）、学校（`#siteName` title）
 - **课程讨论区**：`groupweb.chaoxing.com/course/topic/topicList` 需要的请求参数无法从课程页稳定拼出，未支持。
 - **云盘文件下载**：官方前端明示"文件夹/超过 500MB 需客户端下载"，且下载加密串由服务端 JS 生成，仅有列表查询。
 - **作业详情解析**：不同题型（选择题/报告类）详情页结构有差异，`get_homework_detail` 对取不到的字段留空而非报错。
+- **截止看板**：作业截止时间只在详情页上，`get_homework_deadlines` 需对每份未交作业单独请求详情；详情页缺失截止信息时标"截止未知"。作答时间无年份，按"与今天最接近的年份"补全（跨年作业才可能排错序）。
+- **通知搜索**：服务端 kw 参数无效，关键词过滤在客户端进行，范围仅最近约 100 条。
 - **课程匹配**：`course` 参数按课名子串匹配（精确同名优先，否则取第一个命中）。同名课程多时建议先 `list_courses` 用完整课名。
 - 非学历教育/继续教育等特殊账号体系未验证。
 
