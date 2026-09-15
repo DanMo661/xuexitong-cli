@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "Xuexitong-mcp"
-version = "1.4.0"
+version = "1.4.1"
 description = "学习通（超星）只读查询 MCP Server + 桌面悬浮窗：课表(含 .ics 导出) / 作业截止 / 进度 / 通知"
 readme = "README.md"
 requires-python = ">=3.10"

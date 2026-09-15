@@ -18,7 +18,8 @@ from xuexitong_mcp.client import (  # noqa: E402
     parse_homework_detail, parse_materials, parse_section_times,
     sanitize_filename, strip_tags, week_in_schedule,
 )
-from xuexitong_mcp.widget import fmt_countdown, lesson_rows, pick_current_next  # noqa: E402
+from xuexitong_mcp.widget import (  # noqa: E402
+    ellipsize, fmt_countdown, lesson_rows, pick_current_next)
 from datetime import date, datetime, timedelta  # noqa: E402
 
 # ---------------------------------------------------------------- AES 加解密
@@ -250,6 +251,12 @@ def test_widget_helpers():
     assert fmt_countdown(timedelta(hours=3, minutes=5)) == "3 小时 05 分"
     assert fmt_countdown(timedelta(days=1, hours=3)) == "1 天 3 小时"
     assert fmt_countdown(timedelta(minutes=-2)) == "已过期"
+
+    # 按显示宽度截断（全角2/半角1）
+    assert ellipsize("短标题") == "短标题"
+    r = ellipsize("《数字电路与逻辑设计》具体座位安排附件下载地址与注意事项说明")
+    assert r.endswith("…") and len(r) <= 27  # 限 50 单位 ≈ 25 全角字 + …
+    assert ellipsize("abcdefgh", 10) == "abcdefgh"
 
 
 def test_build_ics():
