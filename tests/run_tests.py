@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""chaoxing-mcp 纯逻辑单元测试。
+"""Xuexitong-mcp 纯逻辑单元测试。
 
 零依赖可直接运行：  python tests/run_tests.py
 也可用 pytest：     pytest tests/ -v
@@ -11,14 +11,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from chaoxing_mcp.client import (  # noqa: E402
+from xuexitong_mcp.client import (  # noqa: E402
     aes_encrypt, aes_decrypt, build_ics, compress_weeks, escape_ics,
     expand_weeks, hidden_value, is_homework_pending, ms_to_date,
     nearest_datetime_for, parse_cd_filename, parse_courses,
     parse_homework_detail, parse_materials, parse_section_times,
     sanitize_filename, strip_tags, week_in_schedule,
 )
-from chaoxing_mcp.widget import fmt_countdown, lesson_rows, pick_current_next  # noqa: E402
+from xuexitong_mcp.widget import fmt_countdown, lesson_rows, pick_current_next  # noqa: E402
 from datetime import date, datetime, timedelta  # noqa: E402
 
 # ---------------------------------------------------------------- AES 加解密

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-r"""chaoxing-mcp 兼容入口。
+r"""Xuexitong-mcp 兼容入口。
 
-旧版 MCP 配置直接指向本文件；实际实现已重构为 chaoxing_mcp/ 包
+旧版 MCP 配置直接指向本文件；实际实现已重构为 xuexitong_mcp/ 包
 （client.py 接口层 + server.py 工具层），行为与旧单文件版兼容。
-新装推荐用 `pip install .` 后运行 `chaoxing-mcp` 或 `python -m chaoxing_mcp`。
+新装推荐用 `pip install .` 后运行 `Xuexitong-mcp` 或 `python -m xuexitong_mcp`。
 
 工具总览（16 个，全部只读查询）：
     login            登录并持久化会话
@@ -29,7 +29,7 @@ r"""chaoxing-mcp 兼容入口。
     3. 同目录 config.json：{"phone": "...", "password": "..."}（不入 git）
 """
 
-from chaoxing_mcp.server import main
+from xuexitong_mcp.server import main
 
 if __name__ == "__main__":
     main()

@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP
 from .client import (ChaoxingClient, strip_tags, week_in_schedule, ms_to_date)
 from . import __version__
 
-mcp = FastMCP("chaoxing", instructions=(
+mcp = FastMCP("xuexitong", instructions=(
     "学习通(超星)只读查询工具：课表（含真实日期/导出 .ics 日历）、课程、资料（递归搜索）、"
     "作业（含截止时间/得分/全课程截止看板）、考试、章节进度（含全课程进度总览）、"
     "通知（含关键词搜索）、云盘、个人资料。本服务只做查询，"
@@ -489,7 +489,7 @@ def list_pan_files(folder_id: str = "") -> str:
 
 
 def main() -> None:
-    """stdio 入口（python -m chaoxing_mcp / chaoxing-mcp 命令）。"""
+    """stdio 入口（python -m xuexitong_mcp / Xuexitong-mcp 命令）。"""
     mcp.run()
 
 
