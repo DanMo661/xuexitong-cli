@@ -157,6 +157,137 @@ def active_course_names(store) -> set[str]:
     return {str(l.get("name") or "") for l in sched.get("lessons", [])} - {""}
 
 
+def _course_match(course: str, names: set[str]) -> bool:
+    """课名匹配：精确或互为包含（课表名与课程列表名常有简繁/后缀差异）。"""
+    return any(course == a or (a and (a in course or course in a))
+               for a in names)
+
+
+# ---------- 考试看板（fetch_exams 原始行 → UI 行） ----------
+
+import re as _re
+
+
+def parse_exam_rows(raw_rows, now: datetime | None = None) -> list[dict]:
+    """fetch_exams 的 tds 行 → 结构化行（含 start/end datetime）。
+
+    列序以 server.py 排版为准：tds[1]名称 tds[2]时间 tds[3]时长
+    tds[4]考试状态 tds[5]作答状态 tds[6]分数 tds[7]方式。
+    解析失败整行跳过——页面格式漂移时不至于拖垮整块看板。
+    """
+    now = now or datetime.now()
+    out: list[dict] = []
+    for tds in raw_rows:
+        if not isinstance(tds, list) or len(tds) < 8:
+            continue
+        name, time_s = (tds[1] or "").strip(), (tds[2] or "").strip()
+        m = _re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", time_s)
+        e = _re.search(r"至\s*(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", time_s)
+        if not name or not m:
+            continue
+        try:
+            start = datetime.strptime(f"{m.group(1)} {m.group(2)}",
+                                      "%Y-%m-%d %H:%M")
+            end = datetime.strptime(f"{e.group(1)} {e.group(2)}",
+                                    "%Y-%m-%d %H:%M") if e else start
+        except ValueError:
+            continue
+        out.append({"name": name, "start": start, "end": end,
+                    "durationMin": (tds[3] or "").strip(),
+                    "status": (tds[4] or "").strip(),
+                    "answer": (tds[5] or "").strip(),
+                    "score": (tds[6] or "").strip(),
+                    "mode": (tds[7] or "").strip()})
+    return out
+
+
+def exams_view(rows: list[dict], now: datetime | None = None,
+               limit: int = 30) -> list[dict]:
+    """考试行 → QML 行：进行中 → 未考（近→远）→ 已结束（近→远）沉底。
+
+    输出只带标签文本（datetime 不进 QML，绑定里没法做字符串运算）。
+    """
+    now = now or datetime.now()
+    view = []
+    for r in rows:
+        if r["start"] <= now <= r["end"]:
+            state = "ongoing"
+        elif r["start"] > now:
+            state = "upcoming"
+        else:
+            state = "done"
+        days = (r["start"].date() - now.date()).days
+        label = {0: "今天", 1: "明天"}.get(days, f"{days} 天后") \
+            if state == "upcoming" else ""
+        view.append({
+            "name": r["name"],
+            "startLabel": r["start"].strftime("%m-%d %H:%M"),
+            "endLabel": r["end"].strftime(
+                "%H:%M" if r["end"].date() == r["start"].date()
+                else "%m-%d %H:%M"),
+            "durationMin": r["durationMin"], "status": r["status"],
+            "answer": r["answer"], "score": r["score"], "mode": r["mode"],
+            "state": state, "days": days, "daysLabel": label,
+        })
+
+    def _key(v: dict):
+        if v["state"] == "done":
+            return (2, -v["days"])   # 已结束的按最近在前沉底
+        return (0 if v["state"] == "ongoing" else 1, v["days"])
+
+    view.sort(key=_key)
+    return view[:limit]
+
+
+def exam_summary(view: list[dict]) -> tuple[str, int]:
+    """Today 页横幅：最近一场未考/进行中考试一句话 + 待考总数。"""
+    live = [v for v in view if v["state"] in ("upcoming", "ongoing")]
+    if not live:
+        return "", 0
+    first = live[0]
+    if first["state"] == "ongoing":
+        text = f"《{first['name']}》考试进行中 · {first['endLabel']} 结束"
+    elif first["days"] == 0:
+        text = f"《{first['name']}》今天开考"
+    else:
+        text = f"距《{first['name']}》还有 {first['days']} 天"
+    return text, len(live)
+
+
+def notices_view(rows: list[dict]) -> list[dict]:
+    """store 通知缓存 → QML 行（title/sender/time/unread/content）。"""
+    return [{"title": r.get("title", ""), "sender": r.get("sender", ""),
+             "time": r.get("time", ""), "unread": bool(r.get("unread")),
+             "content": r.get("content", "")} for r in rows]
+
+
+def progress_view(rows: list[dict],
+                  active_names: set[str] | None = None) -> dict:
+    """任务点总览 → {rows, totalLeft, coursesLeft}：未完成多的在前，
+    全完成的沉底淡化，无数据（未开放章节）的垫底。只统计本学期课。"""
+    out = []
+    for r in rows:
+        course = r.get("course", "")
+        if active_names and not _course_match(course, active_names):
+            continue
+        done, total = r.get("done"), r.get("total")
+        if done is None or total is None:
+            out.append({"course": course, "done": None, "total": None,
+                        "left": 0, "pct": 0, "error": r.get("error") or ""})
+            continue
+        left = max(0, int(total) - int(done))
+        pct = int(int(done) * 100 / total) if total else 100
+        out.append({"course": course, "done": int(done), "total": int(total),
+                    "left": left, "pct": pct, "error": ""})
+    todo = sorted((r for r in out if r["done"] is not None and r["left"] > 0),
+                  key=lambda r: -r["left"])
+    done_rows = [r for r in out if r["done"] is not None and r["left"] == 0]
+    err_rows = [r for r in out if r["done"] is None]
+    return {"rows": todo + done_rows + err_rows,
+            "totalLeft": sum(r["left"] for r in todo),
+            "coursesLeft": len(todo)}
+
+
 # ---------- 周视图网格（纯课表缓存计算，UI 线程可直接调） ----------
 
 # 淡彩底/深字 6 组，课程名哈希取色（浅色主题专用）

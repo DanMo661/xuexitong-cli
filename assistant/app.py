@@ -33,7 +33,9 @@ from assistant.notify import Notifier  # noqa: E402
 from assistant.reminders import ReminderEngine, in_class_now, in_dnd  # noqa: E402
 from assistant.snapshot import (active_course_names,  # noqa: E402
                                 build_snapshot, deadline_items,
-                                ddl_view, week_grid)
+                                ddl_view, exam_summary, exams_view,
+                                notices_view, parse_exam_rows,
+                                progress_view, week_grid)
 from assistant.store import Store  # noqa: E402
 from assistant.watcher import Watcher  # noqa: E402
 from assistant.ui.bridge import Bridge  # noqa: E402
@@ -78,6 +80,8 @@ class ScanWorker(QObject):
     trigger = Signal(bool)               # UI → worker：开始巡检（full）
     hw_request = Signal()                # UI → worker：取作业看板数据
     hw_ready = Signal(list)              # worker → UI：作业看板数据
+    extras_request = Signal(str)         # UI → worker：exams/notices/progress
+    extras_ready = Signal(str, bool)     # worker → UI：kind, 是否成功
     snapshot_ready = Signal(dict, bool)      # snap, ddl_force
     scan_done = Signal(int, str)          # 事件数, 时间文本
     scan_state = Signal(bool)             # worker → UI：扫描中（小窗同步图标转）
@@ -96,6 +100,7 @@ class ScanWorker(QObject):
         # 跨线程信号连接：moveToThread 后这些槽在 worker 线程执行
         self.trigger.connect(self._on_trigger)
         self.hw_request.connect(self._on_hw_request)
+        self.extras_request.connect(self._on_extras_request)
 
     def _on_trigger(self, full: bool) -> None:
         self.do_scan(full)
@@ -108,6 +113,23 @@ class ScanWorker(QObject):
         except Exception:
             items = None   # None=获取失败：详情窗显示错误态而不是"没有作业"
         self.hw_ready.emit(items)
+
+    def _on_extras_request(self, kind: str) -> None:
+        """详情窗手动刷新：worker 线程拉数写缓存，完成后回 UI 重推。"""
+        ok = True
+        try:
+            if kind == "exams":
+                self.store.set_exams(parse_exam_rows(self.client.fetch_exams()))
+            elif kind == "notices":
+                items = self.client.fetch_notices(limit=30)
+                self.store.set_notices(items if isinstance(items, list) else [])
+            elif kind == "progress":
+                self.store.set_progress(self.client.fetch_progress_overview(
+                    stop_check=lambda: self.stopping))
+        except Exception:
+            log.debug("extras 拉取失败 %s：%s", kind, traceback.format_exc())
+            ok = False
+        self.extras_ready.emit(kind, ok)
 
     def do_scan(self, full: bool = False) -> None:
         if self._busy:
@@ -216,7 +238,8 @@ class App:
         self.detail_bridge = DetailBridge(
             settings=self.settings,
             save_cb=self._save_detail_settings,
-            refresh_hw_cb=lambda: self.worker.hw_request.emit())
+            refresh_hw_cb=lambda: self.worker.hw_request.emit(),
+            refresh_extra_cb=lambda k: self.worker.extras_request.emit(k))
         self.engine = QQmlApplicationEngine()
         self.engine.addImportPath(str(QML_DIR))
         self.engine.rootContext().setContextProperty("Bridge", self.bridge)
@@ -259,6 +282,21 @@ class App:
             self.bridge.set_grid(week_grid(self.store, self._week_offset))
         except Exception:
             log.debug("周网格失败：%s", traceback.format_exc())
+
+    def _push_extras(self) -> None:
+        """考试/通知/任务点（纯缓存计算）→ 小窗摘要 + 详情窗列表。"""
+        try:
+            view = exams_view(self.store.get_exams())
+            text, cnt = exam_summary(view)
+            pv = progress_view(self.store.get_progress(),
+                               active_course_names(self.store) or None)
+            self.bridge.set_extras(text, cnt, pv["totalLeft"],
+                                   pv["coursesLeft"])
+            self.detail_bridge.set_exams(view)
+            self.detail_bridge.set_progress(pv)
+            self.detail_bridge.set_notices(notices_view(self.store.get_notices()))
+        except Exception:
+            log.debug("extras 推送失败：%s", traceback.format_exc())
 
     def _on_tick(self) -> None:
         """每分钟：刷新课程状态（进行中→已结束翻牌）+ 预备铃 + 补弹。"""
@@ -329,6 +367,12 @@ class App:
         self.bridge.weekRequested.connect(self._on_week_requested)
         # 详情窗作业页：刷新走 worker 线程，结果回 UI 渲染
         self.worker.hw_ready.connect(self._on_hw_ready)
+        self.worker.extras_ready.connect(self._on_extras_ready)
+
+    def _on_extras_ready(self, kind: str, ok: bool) -> None:
+        self._push_extras()
+        self.detail_bridge.settingsApplied.emit(
+            "已刷新" if ok else "刷新失败，稍后再试")
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(tray_icon())
@@ -374,7 +418,7 @@ class App:
         self.worker.trigger.emit(False)   # 反馈=小窗同步图标旋转，不发托盘气泡
 
     def show_detail(self, tab: str = "") -> None:
-        idx = {"动态": 0, "作业": 1, "设置": 2}.get(tab, 0)
+        idx = {"动态": 0, "作业": 1, "考试": 2, "通知": 3, "设置": 4}.get(tab, 0)
         if tab:
             self.detail_bridge.gotoTab(idx)
         self.detail_win.show()
@@ -382,6 +426,7 @@ class App:
         self.detail_win.requestActivate()
         self.worker.hw_request.emit()   # 打开即拉最新作业
         self.detail_bridge.set_timeline(self.store.timeline(limit=60))
+        self._push_extras()
 
     def toggle_widget(self) -> None:
         self.widget.setVisible(not self.widget.isVisible())
@@ -426,6 +471,8 @@ class App:
             self.show_detail()
         elif name == "open_detail_hw":
             self.show_detail(tab="作业")
+        elif name == "open_detail_exam":
+            self.show_detail(tab="考试")
         elif name == "mark_read":
             self.store.mark_read()
             self.store.save()
@@ -448,6 +495,7 @@ class App:
         self.bridge.set_ddl(ddl_view(self.store.get_deadlines()),
                             force=ddl_force)
         self._push_grid()
+        self._push_extras()
 
     def run(self) -> int:
         code = self.qapp.exec()

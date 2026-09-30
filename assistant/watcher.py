@@ -10,8 +10,10 @@
 import logging
 import time
 
-from .classify import (classify_homework, classify_material, classify_notice,
+from .classify import (classify_exam, classify_homework, classify_hw_status,
+                       classify_material, classify_notice,
                        material_is_homeworkish, probe_dir)
+from .snapshot import parse_exam_rows
 from .store import Store
 
 log = logging.getLogger("watcher")
@@ -101,7 +103,9 @@ class Watcher:
                 log.warning("课程 %s 扫描失败：%s", c.get("name"), msg)
             time.sleep(0.8)   # 课间小歇，别像机器
 
+        events += self._scan_exams()
         events += self._scan_notices()
+        self._maybe_progress(stop_check)
         self.store.mark_scan(full=full)
         if events and self.on_events:
             try:
@@ -121,17 +125,29 @@ class Watcher:
         events: list[Event] = []
         cid, cname = self._cid(c), c.get("name", "")
 
-        # 1) 作业列表 diff
+        # 1) 作业列表 diff（新增 + 状态变化→出分/打回）
         hw_state = self.store.course_state(cid, cname)
         if hw_state.get("homework_open", True):
             try:
                 hw = self.client.fetch_homework(c)
-                titles = [it.get("title", "") for it in hw.get("items", [])]
+                items = hw.get("items", [])
+                titles = [it.get("title", "") for it in items]
                 for t in self.store.diff_homework(cid, titles):
                     if not t:
                         continue
                     verdict = classify_homework(t, "")
                     events.append(self._evt("homework", cname, t, verdict))
+                for title, old, new in self.store.diff_hw_status(
+                        cid, {it.get("title", ""): it.get("status", "")
+                              for it in items}):
+                    verdict = classify_hw_status(old, new)
+                    if not verdict:
+                        continue
+                    detail = f"{old} → {new}"
+                    if verdict["tag"] == "出分":
+                        detail = self._score_detail(c, hw, title) or detail
+                    events.append(self._evt("hwscore", cname, title, verdict,
+                                            detail=detail))
             except Exception as e:
                 if HOMEWORK_CLOSED_MARK in str(e):
                     self.store.set_homework_open(cid, False)
@@ -172,6 +188,7 @@ class Watcher:
             return events
         if not isinstance(items, list):
             items = items.get("items", []) if isinstance(items, dict) else []
+        self.store.set_notices(items)   # 通知 tab 的缓存（读失败保旧）
         by_key: dict[str, dict] = {}
         for n in items:
             key = f"{n.get('time', '')}|{n.get('title', '')}"
@@ -184,6 +201,56 @@ class Watcher:
                                     n.get("title", key), verdict,
                                     detail=(n.get("content", "") or "")[:160]))
         return events
+
+    # ---------- 考试表 / 任务点 ----------
+
+    def _scan_exams(self) -> list[Event]:
+        """考试安排：每轮 1 个请求；新考试进事件（首见建基线不报）。"""
+        try:
+            parsed = parse_exam_rows(self.client.fetch_exams())
+        except Exception as e:
+            log.warning("考试表拉取失败：%s", e)
+            return []
+        self.store.set_exams(parsed)
+        by_key = {f"{r['name']}|{r['start'].strftime('%Y-%m-%d %H:%M')}": r
+                  for r in parsed}
+        events: list[Event] = []
+        for k in self.store.diff_exams(list(by_key.keys())):
+            r = by_key.get(k)
+            if not r:
+                continue
+            events.append(self._evt(
+                "exam", r["name"],
+                f"{r['start'].strftime('%m-%d %H:%M')} 开考 · "
+                f"{r['durationMin']}分钟",
+                classify_exam(r["name"])))
+        return events
+
+    def _maybe_progress(self, stop_check=None) -> None:
+        """任务点总览逐课查询很重（每课 1 请求）：每天第一轮刷一次。"""
+        from datetime import datetime as _dt
+        if self.store.progress_date == _dt.now().strftime("%Y-%m-%d"):
+            return
+        try:
+            self.store.set_progress(self.client.fetch_progress_overview(
+                stop_check=stop_check))
+        except Exception as e:
+            log.warning("任务点总览失败：%s", e)
+
+    def _score_detail(self, c: dict, hw: dict, title: str) -> str:
+        """出分事件富化：尽力拉详情页拿"得分 X / 满分 Y"，失败返回空串。"""
+        try:
+            for it in hw.get("items", []):
+                if it.get("title") == title:
+                    d = self.client.fetch_homework_detail(c, it["index"])
+                    if d.get("score") is not None:
+                        full = d.get("full_score")
+                        return f"得分 {d['score']}" + \
+                            (f" / 满分 {full}" if full else "")
+                    break
+        except Exception as e:
+            log.debug("出分详情拉取失败：%s", e)
+        return ""
 
     # ---------- 事件构造 ----------
 

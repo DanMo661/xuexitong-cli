@@ -130,6 +130,71 @@ class Store:
             self._data["seen_notices"] = list(seen | set(ids))[:1000]
             return [] if fresh else added
 
+    def diff_hw_status(self, cid: str, mapping: dict) -> list[tuple]:
+        """作业状态基线：返回 [(title, old, new)]；首见（old=None）不算变化。"""
+        with self._lock:
+            cs = self._data["courses"].setdefault(str(cid), {
+                "name": "", "homework_open": True, "seen_homework": [],
+                "seen_materials": [], "active": True, "fresh": True})
+            st = cs.setdefault("hw_status", {})
+            changes = []
+            for t, s in mapping.items():
+                old = st.get(t)
+                if old is not None and old != (s or ""):
+                    changes.append((t, old, s or ""))
+                st[t] = s or ""
+            if len(st) > 500:
+                cs["hw_status"] = dict(list(st.items())[-500:])
+            return changes
+
+    # ---------- 考试 / 任务点 / 通知缓存（巡检线程写，UI 读） ----------
+
+    def diff_exams(self, keys: list[str]) -> list[str]:
+        """新考试 key 列表；首见建基线不报（与通知同款策略）。"""
+        with self._lock:
+            seen = set(self._data.get("seen_exams", []))
+            fresh = not seen
+            added = [k for k in keys if k not in seen]
+            self._data["seen_exams"] = list(seen | set(keys))[:200]
+            return [] if fresh else added
+
+    def set_exams(self, rows: list[dict]) -> None:
+        with self._lock:
+            self._data["exams_cache"] = {"rows": rows[:60],
+                                         "saved_at": _now_iso()}
+
+    def get_exams(self) -> list[dict]:
+        with self._lock:
+            return list((self._data.get("exams_cache") or {}).get("rows", []))
+
+    def set_progress(self, rows: list[dict]) -> None:
+        with self._lock:
+            self._data["progress_cache"] = {"rows": rows[:80],
+                                            "date": _now_iso()[:10]}
+
+    def get_progress(self) -> list[dict]:
+        with self._lock:
+            return list((self._data.get("progress_cache") or {}).get("rows", []))
+
+    @property
+    def progress_date(self) -> str:
+        """任务点缓存的刷新日（空=还没拉过；每天拉一次就够）。"""
+        with self._lock:
+            return (self._data.get("progress_cache") or {}).get("date", "")
+
+    def set_notices(self, items: list) -> None:
+        rows = [{"title": n.get("title", ""), "sender": n.get("sender", ""),
+                 "time": (n.get("time", "") or "")[:16].replace("T", " "),
+                 "unread": not n.get("isread"),
+                 "content": (n.get("content", "") or "")[:160]}
+                for n in items[:40] if isinstance(n, dict)]
+        with self._lock:
+            self._data["notices_cache"] = {"rows": rows, "saved_at": _now_iso()}
+
+    def get_notices(self) -> list[dict]:
+        with self._lock:
+            return list((self._data.get("notices_cache") or {}).get("rows", []))
+
     def mark_scan(self, full: bool) -> None:
         with self._lock:
             self._data["last_scan"] = _now_iso()

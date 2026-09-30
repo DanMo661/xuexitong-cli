@@ -774,6 +774,7 @@ class ChaoxingClient:
                     continue
                 row = {"course": co["name"], "title": it["title"],
                        "status": it["status"] or "未知",
+                       "url": it["url"] if it["url"].startswith("http") else "",
                        "deadline": None, "deadline_dt": None}
                 if it["url"].startswith("http"):
                     try:
@@ -796,11 +797,14 @@ class ChaoxingClient:
         return [r for r in rows
                 if r["deadline_dt"] is None or r["deadline_dt"].date() <= horizon]
 
-    def fetch_progress_overview(self) -> list[dict]:
+    def fetch_progress_overview(self, stop_check=None) -> list[dict]:
         """全部课程的章节任务点完成进度一览（逐课查询，逐课容错，
-        未开放章节功能的课记 error 而不是让整个看板失败）。"""
+        未开放章节功能的课记 error 而不是让整个看板失败）。
+        stop_check 返回 True 时尽快中止（退出程序时用）。"""
         out: list[dict] = []
         for co in self.fetch_courses():
+            if stop_check and stop_check():
+                break
             row = {"course": co["name"], "done": None, "total": None, "error": None}
             try:
                 data = self.fetch_chapters(co, with_nodes=False)

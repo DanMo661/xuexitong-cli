@@ -25,6 +25,7 @@ QtObject {
     readonly property color danger: "#EF4444"
     readonly property color dangerSoft: Qt.rgba(0.937, 0.267, 0.267, 0.10)
     readonly property color warn: "#C97A16"
+    readonly property color warnSoft: Qt.rgba(0.788, 0.478, 0.086, 0.10)
 
     // 缓动（cc-switch：入场慢出弹、离场快；CW2 液态回弹）
     readonly property var liquidBack: [0.175, 0.885, 0.32, 1.2, 1, 1]

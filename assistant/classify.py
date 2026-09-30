@@ -52,6 +52,32 @@ def classify_notice(title: str, sender: str = "", content: str = "") -> dict:
     return {"tag": "通知", "priority": "low", "reason": "一般通知"}
 
 
+def classify_exam(name: str) -> dict:
+    """考试表新增安排：一律 high（考试本身就是信号）。"""
+    return {"tag": "考试", "priority": "high", "reason": f"新考试安排：{name}"}
+
+
+# 批阅完成的常见状态词（作业列表 status 文本）
+_GRADED_WORDS = ("已完成", "已批阅")
+
+
+def classify_hw_status(old: str, new: str) -> dict | None:
+    """作业状态变化分级；无价值的变化返回 None 不进时间线。
+
+    出分（→已完成/已批阅）high；疑似打回（已交类→未交）medium；
+    自己交上去的确认（→已交/待批阅）low——用户刚在 App 交完不该被弹。
+    """
+    o, n = old or "", new or ""
+    if not o or not n or o == n:
+        return None
+    if any(w in n for w in _GRADED_WORDS) and not any(w in o for w in _GRADED_WORDS):
+        return {"tag": "出分", "priority": "high", "reason": f"{o} → {n}"}
+    if "未交" in n and "未交" not in o and "已" in o:
+        return {"tag": "作业", "priority": "medium",
+                "reason": f"{o} → {n}（可能被打回）"}
+    return {"tag": "作业", "priority": "low", "reason": f"{o} → {n}"}
+
+
 def material_is_homeworkish(file_path: str, max_bytes: int = 8 << 20) -> bool | None:
     """对下载到本地的 pptx 做正文二次确认：前几张 slide 有作业字样则 True。
 

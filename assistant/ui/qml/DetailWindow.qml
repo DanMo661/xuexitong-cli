@@ -3,7 +3,7 @@ import QtQuick.Layouts
 import QtQuick.Controls.Basic
 import "." as Ui
 
-// 详情窗：动态/作业/设置 —— 与悬浮小窗同一套 cc-switch 体系
+// 详情窗：动态/作业/考试/通知/设置 —— 与悬浮小窗同一套 cc-switch 体系
 Window {
     id: root
     width: 460; height: 600
@@ -21,37 +21,43 @@ Window {
         anchors.leftMargin: 16; anchors.rightMargin: 16
         spacing: 12
 
-        Row {
-            width: parent.width; spacing: 10
-            Rectangle {
-                width: 34; height: 34; radius: 10
-                color: Ui.Theme.primary
-                Text {
-                    anchors.centerIn: parent; text: "学"
-                    color: "#FFFFFF"; font.pixelSize: 16; font.bold: true
-                    font.family: Ui.Theme.fontFamily
+        Item {
+            width: parent.width; height: 34
+            Row {
+                anchors.left: parent.left
+                spacing: 10
+                Rectangle {
+                    width: 34; height: 34; radius: 10
+                    color: Ui.Theme.primary
+                    Text {
+                        anchors.centerIn: parent; text: "学"
+                        color: "#FFFFFF"; font.pixelSize: 16; font.bold: true
+                        font.family: Ui.Theme.fontFamily
+                    }
+                }
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter; spacing: 1
+                    Text {
+                        text: "详情"
+                        color: Ui.Theme.fg; font.pixelSize: 16
+                        font.weight: Font.DemiBold
+                        font.family: Ui.Theme.fontFamily
+                    }
+                    Text {
+                        text: "动态、作业、考试、通知和设置都在这"
+                        color: Ui.Theme.muted; font.pixelSize: 11
+                        font.family: Ui.Theme.fontFamily
+                    }
                 }
             }
-            Column {
-                anchors.verticalCenter: parent.verticalCenter; spacing: 1
-                Text {
-                    text: "详情"
-                    color: Ui.Theme.fg; font.pixelSize: 16
-                    font.weight: Font.DemiBold
-                    font.family: Ui.Theme.fontFamily
-                }
-                Text {
-                    text: "动态、作业和设置都在这"
-                    color: Ui.Theme.muted; font.pixelSize: 11
-                    font.family: Ui.Theme.fontFamily
-                }
-            }
-            Item { width: parent.width - 250; height: 1 }
+            // 刷新按钮锚右：副标题变长也不会把它推出窗口
             Rectangle {
+                anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 width: refreshTxt.width + 22; height: 30; radius: 8
                 color: Ui.Theme.secondary
-                visible: bar.currentIndex === 1
+                // 作业/考试/通知三页才有刷新（考试页的考试数据、任务点各自页内刷）
+                visible: bar.currentIndex >= 1 && bar.currentIndex <= 3
                 Text {
                     id: refreshTxt
                     anchors.centerIn: parent; text: "⟳ 刷新"
@@ -61,7 +67,11 @@ Window {
                 }
                 MouseArea {
                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                    onClicked: DBridge.refreshHw()
+                    onClicked: {
+                        if (bar.currentIndex === 1) DBridge.refreshHw()
+                        else if (bar.currentIndex === 2) DBridge.refreshExtra("exams")
+                        else if (bar.currentIndex === 3) DBridge.refreshExtra("notices")
+                    }
                 }
             }
         }
@@ -75,8 +85,8 @@ Window {
             Rectangle {
                 id: chip
                 y: 3; height: 28; radius: 8
-                width: bar.width / 3 - 6
-                x: 3 + bar.currentIndex * (bar.width / 3)
+                width: bar.width / 5 - 6
+                x: 3 + bar.currentIndex * (bar.width / 5)
                 color: "#FFFFFF"
                 border.width: 1; border.color: Ui.Theme.borderSoft
                 Behavior on x {
@@ -89,9 +99,9 @@ Window {
             Row {
                 anchors.fill: parent
                 Repeater {
-                    model: ["动态", "作业", "设置"]
+                    model: ["动态", "作业", "考试", "通知", "设置"]
                     delegate: Item {
-                        width: bar.width / 3; height: bar.height
+                        width: bar.width / 5; height: bar.height
                         Text {
                             anchors.centerIn: parent; text: modelData
                             color: bar.currentIndex === index ? Ui.Theme.fg : Ui.Theme.muted
@@ -330,6 +340,14 @@ Window {
                     }
                 }
             }
+        }
+
+        // ---------- 考试 ----------
+        ExamPage {
+        }
+
+        // ---------- 通知 ----------
+        NoticePage {
         }
 
         // ---------- 设置（滚动区 + 常驻保存按钮）----------

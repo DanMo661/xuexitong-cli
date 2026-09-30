@@ -37,6 +37,7 @@ class Bridge(QObject):
     ddlChanged = Signal()
     gridChanged = Signal()
     scanningChanged = Signal()
+    extrasChanged = Signal()         # 考试摘要 / 任务点未完成数（Today 页）
     actionTriggered = Signal(str)     # QML → app：scan_now/open_detail/hide/…
     weekRequested = Signal(int)       # QML → app：重算第 (当前+offset) 周网格
     tabJumped = Signal(int)           # python → QML：切页（截图模式/外部跳转用）
@@ -66,6 +67,10 @@ class Bridge(QObject):
         self._scanning = False
         self._soon_minutes = -1        # 下一节剩余分钟（状态点紧迫感）
         self._synced = True            # 课表缓存是否可用（未同步别装"没课"）
+        self._exam_summary = ""        # Today 页考试横幅（空=无待考）
+        self._exam_count = 0
+        self._progress_left = 0        # 任务点未完成总数（0=不显示）
+        self._progress_courses = 0
 
     # ---------- 数据注入（app 线程调用） ----------
 
@@ -155,6 +160,18 @@ class Bridge(QObject):
         self._scanning = on
         self.scanningChanged.emit()
 
+    def set_extras(self, exam_summary: str, exam_count: int,
+                   progress_left: int, progress_courses: int) -> None:
+        """Today 页摘要（考试横幅 + 任务点缺口）；没变不 emit 防闪烁。"""
+        if (exam_summary, exam_count, progress_left, progress_courses) != \
+                (self._exam_summary, self._exam_count,
+                 self._progress_left, self._progress_courses):
+            self._exam_summary = exam_summary
+            self._exam_count = exam_count
+            self._progress_left = progress_left
+            self._progress_courses = progress_courses
+            self.extrasChanged.emit()
+
     # ---------- QML 属性 ----------
 
     @Property(str, notify=snapshotChanged)
@@ -210,6 +227,18 @@ class Bridge(QObject):
 
     @Property(bool, notify=snapshotChanged)
     def synced(self): return self._synced
+
+    @Property(str, notify=extrasChanged)
+    def examSummary(self): return self._exam_summary
+
+    @Property(int, notify=extrasChanged)
+    def examCount(self): return self._exam_count
+
+    @Property(int, notify=extrasChanged)
+    def progressLeft(self): return self._progress_left
+
+    @Property(int, notify=extrasChanged)
+    def progressCourses(self): return self._progress_courses
 
     # ---------- QML → Python 动作 ----------
 

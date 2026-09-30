@@ -56,14 +56,18 @@ Item {
 
             // ---- 今日概览条 ----
             Rectangle {
-                visible: Bridge.dayTotal > 0
+                visible: Bridge.dayTotal > 0 || Bridge.progressLeft > 0
                 width: parent.width; height: 30; radius: Ui.Theme.radiusSm
                 color: Ui.Theme.cardAlt
                 Text {
                     anchors.centerIn: parent
-                    text: "今天 " + Bridge.dayTotal + " 次课 · 已结束 "
-                          + Bridge.dayDone + " · 还剩 "
-                          + (Bridge.dayTotal - Bridge.dayDone)
+                    text: Bridge.dayTotal > 0
+                          ? "今天 " + Bridge.dayTotal + " 次课 · 已结束 "
+                            + Bridge.dayDone + " · 还剩 "
+                            + (Bridge.dayTotal - Bridge.dayDone)
+                            + (Bridge.progressLeft > 0
+                               ? " · 任务点缺 " + Bridge.progressLeft : "")
+                          : "任务点还差 " + Bridge.progressLeft + " 个没刷完"
                     color: Ui.Theme.muted; font.pixelSize: 11
                     font.family: Ui.Theme.fontFamily
                 }
@@ -302,6 +306,65 @@ Item {
                     font.family: Ui.Theme.fontFamily
                 }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: page.jumpToHw() }
+            }
+
+            // ---- 考试横幅（有待考/进行中才出现）----
+            Rectangle {
+                visible: Bridge.examSummary !== ""
+                width: parent.width; height: 48; radius: Ui.Theme.radiusMd
+                color: "#FFFFFF"
+                border.width: 1; border.color: Ui.Theme.border
+                Rectangle {
+                    x: 10; anchors.verticalCenter: parent.verticalCenter
+                    width: 3; height: 22; radius: 1.5
+                    color: Ui.Theme.warn
+                }
+                // 考试图标块（与课程色块同规格，暖色区分"不是课"）
+                Rectangle {
+                    x: 22; anchors.verticalCenter: parent.verticalCenter
+                    width: 30; height: 30; radius: 9
+                    color: Ui.Theme.warnSoft
+                    border.width: 1; border.color: Ui.Theme.border
+                    Text {
+                        anchors.centerIn: parent; text: "考"
+                        color: Ui.Theme.warn; font.pixelSize: 13; font.bold: true
+                        font.family: Ui.Theme.fontFamily
+                    }
+                }
+                Column {
+                    x: 60; anchors.verticalCenter: parent.verticalCenter; spacing: 2
+                    width: parent.width - 60 - examChip.width - 30
+                    Text {
+                        width: parent.width
+                        text: Bridge.examSummary
+                        color: Ui.Theme.fg; font.pixelSize: 11; font.weight: Font.Medium
+                        font.family: Ui.Theme.fontFamily
+                        elide: Text.ElideRight
+                    }
+                    Text {
+                        text: "点击查看全部考试安排"
+                        color: Ui.Theme.faint; font.pixelSize: 9
+                        font.family: Ui.Theme.fontFamily
+                    }
+                }
+                Rectangle {
+                    id: examChip
+                    anchors.right: parent.right; anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: examChipTxt.width + 14; height: 20; radius: 10
+                    color: Ui.Theme.warnSoft
+                    Text {
+                        id: examChipTxt
+                        anchors.centerIn: parent
+                        text: Bridge.examCount + " 场"
+                        color: Ui.Theme.warn; font.pixelSize: 10; font.weight: Font.Medium
+                        font.family: Ui.Theme.fontFamily
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                    onClicked: Bridge.action("open_detail_exam")
+                }
             }
         }
     }
