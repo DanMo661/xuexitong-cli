@@ -16,7 +16,7 @@ class DetailBridge(QObject):
     settingsApplied = Signal(str)     # python → QML：保存结果提示文案
     refreshingChanged = Signal()      # 手动刷新进行中（⟳ 旋转反馈）
     hwOpenRequested = Signal(str, str, str)   # url, course, title → app
-    hwIgnoreRequested = Signal(str, str)      # course, title → app
+    hwIgnoreRequested = Signal(str, str, str)  # course, title, url → app
     unignoreRequested = Signal()              # 清空忽略名单 → app
     icsRequested = Signal()                   # 导出课表 .ics → app
     ignoredChanged = Signal()

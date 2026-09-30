@@ -42,7 +42,7 @@ class Bridge(QObject):
     weekRequested = Signal(int)       # QML → app：重算第 (当前+offset) 周网格
     tabJumped = Signal(int)           # python → QML：切页（截图模式/外部跳转用）
     hwOpenRequested = Signal(str, str, str)   # url, course, title → app 开浏览器
-    hwIgnoreRequested = Signal(str, str)      # course, title → app 忽略
+    hwIgnoreRequested = Signal(str, str, str)  # course, title, url → app 忽略
     ignoredChanged = Signal()
 
     def __init__(self, parent=None, get_position=None, save_pos=None):
@@ -71,6 +71,7 @@ class Bridge(QObject):
         self._soon_minutes = -1        # 下一节剩余分钟（状态点紧迫感）
         self._synced = True            # 课表缓存是否可用（未同步别装"没课"）
         self._exam_summary = ""        # Today 页考试横幅（空=无待考）
+        self._exam_sub = ""            # 副行（进行中时放课程名）
         self._exam_count = 0
         self._exam_ongoing = False     # 最近一场考试正在进行（横幅红色紧急态）
         self._progress_left = 0        # 任务点未完成总数（0=不显示）
@@ -171,15 +172,17 @@ class Bridge(QObject):
             self._ignored_hw = n
             self.ignoredChanged.emit()
 
-    def set_extras(self, exam_summary: str, exam_count: int,
+    def set_extras(self, exam_summary: str, exam_sub: str, exam_count: int,
                    exam_ongoing: bool, progress_left: int,
                    progress_courses: int) -> None:
         """Today 页摘要（考试横幅 + 任务点缺口）；没变不 emit 防闪烁。"""
-        if (exam_summary, exam_count, exam_ongoing, progress_left,
+        if (exam_summary, exam_sub, exam_count, exam_ongoing, progress_left,
                 progress_courses) != (
-                self._exam_summary, self._exam_count, self._exam_ongoing,
-                self._progress_left, self._progress_courses):
+                self._exam_summary, self._exam_sub, self._exam_count,
+                self._exam_ongoing, self._progress_left,
+                self._progress_courses):
             self._exam_summary = exam_summary
+            self._exam_sub = exam_sub
             self._exam_count = exam_count
             self._exam_ongoing = exam_ongoing
             self._progress_left = progress_left
@@ -245,6 +248,9 @@ class Bridge(QObject):
     @Property(str, notify=extrasChanged)
     def examSummary(self): return self._exam_summary
 
+    @Property(str, notify=extrasChanged)
+    def examSub(self): return self._exam_sub
+
     @Property(int, notify=extrasChanged)
     def examCount(self): return self._exam_count
 
@@ -279,9 +285,9 @@ class Bridge(QObject):
         """在学习通打开这份作业（app 侧开浏览器 + 复制作业名）。"""
         self.hwOpenRequested.emit(url, course, title)
 
-    @Slot(str, str)
-    def ignoreHw(self, course: str, title: str) -> None:
-        self.hwIgnoreRequested.emit(course, title)
+    @Slot(str, str, str)
+    def ignoreHw(self, course: str, title: str, url: str) -> None:
+        self.hwIgnoreRequested.emit(course, title, url)
 
     @Slot(result="QVariant")
     def initial_position(self):

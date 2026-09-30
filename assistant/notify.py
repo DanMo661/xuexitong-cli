@@ -108,8 +108,11 @@ class Notifier:
             from windows_toasts import (InteractableWindowsToaster, Toast,
                                         ToastButton)
             if self._itoasts is None:
-                # 1.3.x：直接构造即用（2.x 才有 context manager，别乱加）
-                self._itoasts = InteractableWindowsToaster(APP_ID)
+                # 1.3.x：直接构造即用（2.x 才有 context manager，别乱加）。
+                # notifierAUMID 必须显式给：默认落在 cmd.exe 上，
+                # 通知中心和横幅的归属会显示成 Windows Command Processor
+                self._itoasts = InteractableWindowsToaster(APP_ID,
+                                                           notifierAUMID=APP_ID)
             t = Toast()
             t.text_fields = [title, body.replace("\n", "  ")]
 

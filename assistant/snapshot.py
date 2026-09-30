@@ -259,20 +259,24 @@ def _as_dt(v):
     return None
 
 
-def exam_summary(view: list[dict]) -> tuple[str, int, bool]:
-    """Today 页横幅：一句话 + 待考总数 + 是否进行中（进行中走红色紧急态）。"""
+def exam_summary(view: list[dict]) -> tuple[str, str, int, bool]:
+    """Today 页横幅：(主行, 副行, 待考总数, 是否进行中)。
+
+    进行中把"几点结束"放主行（最要紧的信息），课程名挪副行——
+    360px 宽塞不下全名+状态+时间三件套（nitpick #5 截断实锤）。
+    """
     live = [v for v in view if v["state"] in ("upcoming", "ongoing")]
     if not live:
-        return "", 0, False
+        return "", "", 0, False
     first = live[0]
     if first["state"] == "ongoing":
-        text = f"《{first['name']}》考试进行中 · {first['endLabel']} 结束"
-        return text, len(live), True
+        return (f"考试进行中 · {first['endLabel']} 结束",
+                f"《{first['name']}》", len(live), True)
     if first["days"] == 0:
         text = f"《{first['name']}》今天 {first['startClock']} 开考"
     else:
         text = f"距《{first['name']}》还有 {first['days']} 天"
-    return text, len(live), False
+    return text, "", len(live), False
 
 
 def notices_view(rows: list[dict]) -> list[dict]:
@@ -380,12 +384,14 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
     base = {"week": 1, "maxWeek": 0, "rangeLabel": "", "empty": not lessons,
             "dayLabels": [], "dayDates": [], "isTodayCol": [],
             "nodeLabels": [], "nodeTimes": [], "currentNode": -1,
-            "blocks": []}
+            "nowLine": -1.0, "blocks": []}
     if not lessons:
         return base
-    week = max(1, week_of(sched, now.date()) + offset)
+    fw0 = cur.get("firstWeekDate") or cur.get("firstWeekDateReal")
+    # 无学期锚点：week=0（UI 显示"学期未同步"，别装第 1 周误导）
+    week = max(1, week_of(sched, now.date()) + offset) if fw0 else 0
     maxw = int(cur.get("maxWeek") or 0)
-    if maxw:
+    if maxw and week:
         week = min(week, maxw)
     base["week"] = week
     base["maxWeek"] = maxw
@@ -431,7 +437,7 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
         for n in range(1, max_node + 1)]
     base["blocks"] = blocks
 
-    # 当前节次（时间轨胶囊高亮）：仅本周视图且学期内才算
+    # 当前节次（时间轨胶囊高亮）+ 时间红线（节内进度换算成行坐标）
     if offset == 0 and in_term and times:
         cur_min = now.hour * 60 + now.minute
         starts = [t[0].hour * 60 + t[0].minute for t in times[:max_node]]
@@ -439,6 +445,7 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
             e = starts[i + 1] if i + 1 < len(starts) else s + 45
             if s <= cur_min < e:
                 base["currentNode"] = i
+                base["nowLine"] = i + (cur_min - s) / max(1, e - s)
                 break
     return base
 
@@ -456,7 +463,10 @@ def ddl_view(items: list[dict], now: datetime | None = None,
     ig = set(ignores or [])
     out = []
     for r in items[:limit]:
-        if Store.hw_key(r.get("course", ""), r.get("title", "")) in ig:
+        # 双形态匹配：忽略时行可能还没有 url，之后巡检带上了——
+        # 只认带 url 的键会让旧忽略悄悄失效
+        c, t, u = r.get("course", ""), r.get("title", ""), r.get("url", "")
+        if Store.hw_key(c, t, u) in ig or Store.hw_key(c, t) in ig:
             continue
         dt_ = r.get("deadline_dt")
         if dt_ is None and r.get("deadline_iso"):

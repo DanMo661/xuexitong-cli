@@ -73,7 +73,7 @@ assistant/
 
 - `python tests/run_tests.py`：协议层单测（保持全绿）
 - `python tests/test_assistant.py`：assistant 侧单测（考试/出分/任务点/基线）
-- `python -m assistant.watch --once --headless`：单轮巡检冒烟
+- `python -m assistant.watch --once`：单轮巡检冒烟（脚本本身 headless）
 - `python -m assistant.app --screenshot out.png`：迷你+四页截图（屏幕合成，
   产物 out_mini/t0..t3.png）
 - UI 改动后截图过视觉复检；发布前跑 nitpick 新用户实测

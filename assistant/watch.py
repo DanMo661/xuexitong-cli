@@ -51,8 +51,18 @@ def main() -> int:
     settings = load_settings()
     if args.quiet:
         settings["toast_enabled"] = False
-    store = Store(str(ROOT / "store.json"))
     client = ChaoxingClient()
+    # 凭据缺失先说人话：登录页 HTML 撞 JSON 解析的报错没人看得懂
+    try:
+        phone, pwd = client._load_credentials()
+    except Exception:
+        phone = pwd = None
+    if not phone or not pwd:
+        print("config.json 里没有学习通账号密码。"
+              "先复制 config.example.json 为 config.json 填好手机号/密码"
+              "（或跑一次桌面助手完成登录），再来巡检。")
+        return 2
+    store = Store(str(ROOT / "store.json"))
     notifier = Notifier(settings)
     w = Watcher(client, store)
 

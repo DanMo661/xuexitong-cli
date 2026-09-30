@@ -46,7 +46,15 @@ def set_autostart(on: bool, exe: str = "") -> None:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
                             winreg.KEY_SET_VALUE) as k:
             if on:
-                val = exe or f'"{os.path.join(ROOT, "学习通小助手.bat")}"'
+                # 优先 pythonw 直启：走 bat 会先起 cmd（开机闪黑框，
+                # venv 丢失时还会卡住一个带 pause 的黑窗）
+                pw = os.path.join(ROOT, ".venv", "Scripts", "pythonw.exe")
+                if exe:
+                    val = exe
+                elif os.path.exists(pw):
+                    val = f'"{pw}" "{os.path.join(ROOT, "assistant", "app.py")}"'
+                else:
+                    val = f'"{os.path.join(ROOT, "学习通小助手.bat")}"'
                 winreg.SetValueEx(k, APP_REG_NAME, 0, winreg.REG_SZ, val)
             else:
                 try:

@@ -34,3 +34,5 @@ widget_geometry.json
 /_snap_ccswitch.ps1
 /_r1_*.py
 store.json.tmp
+/_r2_*
+/_r3_*

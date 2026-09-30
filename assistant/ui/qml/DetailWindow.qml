@@ -320,7 +320,7 @@ Window {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: DBridge.openHw(
-                                        modelData.url || "",
+                                        modelData.url || modelData.courseUrl || "",
                                         modelData.course, modelData.title)
                                 }
                             }
@@ -338,7 +338,8 @@ Window {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: DBridge.ignoreHw(
-                                        modelData.course, modelData.title)
+                                        modelData.course, modelData.title,
+                                        modelData.url || "")
                                 }
                             }
                         }
@@ -556,6 +557,15 @@ Window {
                             Switch {
                                 checked: setFlick.autostart
                                 onToggled: setFlick.autostart = checked
+                            }
+                        }
+                        SetRow {
+                            label: "快捷键"
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "Alt+Shift+C 唤起/隐藏小窗"
+                                color: Ui.Theme.muted; font.pixelSize: 11
+                                font.family: Ui.Theme.fontFamily
                             }
                         }
                         SetRow {

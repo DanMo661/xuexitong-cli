@@ -53,8 +53,10 @@ Item {
 
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                text: "第 " + (Bridge.grid.week || 1) + " 教学周"
-                      + (Bridge.grid.rangeLabel ? " · " + Bridge.grid.rangeLabel : "")
+                text: (Bridge.grid.week || 0) > 0
+                      ? "第 " + Bridge.grid.week + " 教学周"
+                        + (Bridge.grid.rangeLabel ? " · " + Bridge.grid.rangeLabel : "")
+                      : "学期未同步"
                 color: Ui.Theme.fg; font.pixelSize: 12
                 font.weight: Font.DemiBold
                 font.family: Ui.Theme.fontFamily
@@ -224,6 +226,27 @@ Item {
                                 horizontalAlignment: Text.AlignHCenter
                             }
                         }
+                    }
+                }
+
+                // 当前时间红线（仅本周视图）：横贯网格 + 右端圆点，
+                // 一眼看出现在进行到第几节
+                Item {
+                    visible: Bridge.grid.nowLine !== undefined
+                             && Bridge.grid.nowLine >= 0
+                    y: Bridge.grid.nowLine * page.rowH - 1
+                    x: page.railW
+                    width: parent.width - page.railW
+                    height: 2
+                    Rectangle {
+                        anchors.fill: parent; radius: 1
+                        color: Ui.Theme.danger; opacity: 0.85
+                    }
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 6; height: 6; radius: 3
+                        color: Ui.Theme.danger
                     }
                 }
 

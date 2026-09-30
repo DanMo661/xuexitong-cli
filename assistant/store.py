@@ -356,13 +356,14 @@ class Store:
     # ---------- 作业忽略（"已线下交/不打算交"的手动排除） ----------
 
     @staticmethod
-    def hw_key(course: str, title: str) -> str:
-        return f"{course}|{title}"
+    def hw_key(course: str, title: str, url: str = "") -> str:
+        """忽略键含作业 url：同课同名作业不连坐（url 空退化到标题）。"""
+        return f"{course}|{url}|{title}"
 
-    def ignore_hw(self, course: str, title: str) -> None:
+    def ignore_hw(self, course: str, title: str, url: str = "") -> None:
         with self._lock:
             ig = self._data.setdefault("hw_ignores", [])
-            k = self.hw_key(course, title)
+            k = self.hw_key(course, title, url)
             if k not in ig:
                 ig.append(k)
             del ig[:-200]

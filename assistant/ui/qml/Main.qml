@@ -57,6 +57,7 @@ Window {
                 property point pressWindow
                 property bool moved
                 onPressed: mouse => {
+                    snapAnim.stop()   // 磁吸滑行中再抓 = 立即接管
                     pressGlobal = mapToGlobal(mouse.x, mouse.y)
                     pressWindow = Qt.point(root.x, root.y)
                     moved = false
@@ -69,8 +70,42 @@ Window {
                 }
                 onReleased: {
                     if (!moved) card.expanded = !card.expanded
-                    else Bridge.save_position(root.x, root.y)
+                    else topbar._snapToEdges()   // 嵌套对象里只认组件根，函数要 id 限定
                 }
+            }
+
+            function _snapToEdges() {
+                // 贴边磁吸：24px 内吸附最近屏幕边（Class Widgets 手感的简化版）
+                const m = 24
+                let tx = root.x, ty = root.y
+                if (root.x < m) tx = 0
+                else if (root.x + root.width > Screen.width - m)
+                    tx = Screen.width - root.width
+                if (root.y < m) ty = 0
+                if (tx === root.x && ty === root.y) {
+                    Bridge.save_position(root.x, root.y)
+                    return
+                }
+                snapAnim.stop()
+                snapAnim.tx = tx; snapAnim.ty = ty
+                snapAnim.start()
+            }
+
+            ParallelAnimation {
+                id: snapAnim
+                property real tx: 0
+                property real ty: 0
+                NumberAnimation {
+                    target: root; property: "x"; to: snapAnim.tx
+                    duration: 200; easing.type: Easing.Bezier
+                    easing.bezierCurve: Ui.Theme.ccEnter
+                }
+                NumberAnimation {
+                    target: root; property: "y"; to: snapAnim.ty
+                    duration: 200; easing.type: Easing.Bezier
+                    easing.bezierCurve: Ui.Theme.ccEnter
+                }
+                onStopped: Bridge.save_position(root.x, root.y)
             }
 
             Row {

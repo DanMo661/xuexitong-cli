@@ -239,7 +239,7 @@ Item {
                 onPick: {
                     hwMenu.visible = false
                     if (page.menuCard)
-                        Bridge.openHw(page.menuCard.url || "",
+                        Bridge.openHw(page.menuCard.url || page.menuCard.courseUrl || "",
                                       page.menuCard.course,
                                       page.menuCard.title)
                 }
@@ -249,17 +249,19 @@ Item {
                 onPick: {
                     hwMenu.visible = false
                     if (page.menuCard)
-                        Bridge.ignoreHw(page.menuCard.course, page.menuCard.title)
+                        Bridge.ignoreHw(page.menuCard.course, page.menuCard.title,
+                                        page.menuCard.url || "")
                 }
             }
         }
     }
-    // 点菜单外关闭
+    // 点菜单外关闭（滚轮也算"移开"——菜单悬空错位比关掉更糟）
     MouseArea {
         enabled: hwMenu.visible
         anchors.fill: parent
         z: 99
         onClicked: hwMenu.visible = false
+        onWheel: hwMenu.visible = false
     }
 
     component HwMenuItem: Rectangle {

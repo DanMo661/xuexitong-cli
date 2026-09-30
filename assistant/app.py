@@ -12,8 +12,10 @@
 import json
 import logging
 import os
+import re
 import sys
 import traceback
+from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
@@ -21,8 +23,8 @@ from assistant.paths import ROOT
 
 sys.path.insert(0, str(ROOT))
 
-from PySide6.QtCore import (Qt, QMetaObject, QThread, QTimer, QUrl,  # noqa: E402
-                            Signal, QObject)
+from PySide6.QtCore import (QAbstractNativeEventFilter, Qt, QMetaObject,  # noqa: E402
+                            QThread, QTimer, QUrl, Signal, QObject)
 from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap  # noqa: E402
 from PySide6.QtNetwork import QLocalServer, QLocalSocket  # noqa: E402
@@ -48,6 +50,28 @@ LOCK_NAME = "xuexitong-assistant-singleton"
 QML_DIR = ROOT / "assistant" / "ui" / "qml"
 
 FULL_SCAN_HOURS = 20   # 每天最多 1 次全量基线重扫（距上次 >20h 才做）
+
+# 全局热键：Alt+Shift+C 唤起/隐藏小窗（RegisterHotKey + 原生消息过滤）
+WM_HOTKEY = 0x0312
+MOD_ALT, MOD_SHIFT = 0x0001, 0x0004
+
+
+class _HotkeyFilter(QAbstractNativeEventFilter):
+    """WM_HOTKEY 只在本进程窗口的消息队列里，Qt 事件循环线程回调（安全）。"""
+
+    def __init__(self, cb):
+        super().__init__()
+        self._cb = cb
+
+    def nativeEventFilter(self, event_type, message):
+        try:
+            if event_type == b"windows_generic_MSG":
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == WM_HOTKEY:
+                    self._cb(int(msg.wParam))
+        except Exception:
+            pass
+        return False
 
 
 def tray_icon(color: str = "#0969DA") -> QIcon:
@@ -214,7 +238,17 @@ class ScanWorker(QObject):
             if dl_items is not None:
                 self._enrich_course_links(dl_items)
                 self.store.set_deadlines(dl_items)
-            dl = {"items": dl_items or []}
+            # 忽略要挡提醒引擎（"不再提醒"是承诺）：喂引擎前先滤掉
+            ig = set(self.store.hw_ignores())
+            from assistant.store import Store
+
+            def _ignored(r: dict) -> bool:
+                c, t = r.get("course", ""), r.get("title", "")
+                u = r.get("url", "")
+                return (Store.hw_key(c, t, u) in ig
+                        or Store.hw_key(c, t) in ig)
+
+            dl = {"items": [r for r in (dl_items or []) if not _ignored(r)]}
             # 提醒聚合一条发，别连弹 N 个横幅（Windows 同源通知有限流）
             remind_msgs = []
             for r in self.engine.check(dl, rows):
@@ -229,8 +263,11 @@ class ScanWorker(QObject):
             if not still_silent:
                 pending = self.store.pop_pending()
                 if pending:
-                    body = "\n".join(p.get("text", "") for p in pending[:4])
-                    self.toast_request.emit("刚刚下课，补个提醒", body, "作业")
+                    body = "\n".join(
+                        p.get("text", "") for p in pending[:4]
+                        if not _ignored(p))
+                    if body:
+                        self.toast_request.emit("刚刚下课，补个提醒", body, "作业")
         except Exception:
             log.debug("提醒引擎跳过：%s", traceback.format_exc())
 
@@ -305,6 +342,7 @@ class App:
 
         self._build_tray()
         self._wire()
+        self._register_hotkey()
         self._schedule(startup_scan=kwargs.get("startup_scan", True))
         self._week_offset = 0
         # 首帧数据（纯缓存）+ 60s 心跳：状态翻牌/预备铃/下课补弹
@@ -332,11 +370,11 @@ class App:
         """考试/通知/任务点（纯缓存计算）→ 小窗摘要 + 详情窗列表。"""
         try:
             view = exams_view(self.store.get_exams())
-            text, cnt, ongoing = exam_summary(view)
+            text, sub, cnt, ongoing = exam_summary(view)
             pv = progress_view(self.store.get_progress(),
                                active_course_names(self.store) or None)
             pv["date"] = self.store.progress_date
-            self.bridge.set_extras(text, cnt, ongoing,
+            self.bridge.set_extras(text, sub, cnt, ongoing,
                                    pv["totalLeft"], pv["coursesLeft"])
             self.detail_bridge.set_exams(view)
             self.detail_bridge.set_progress(pv)
@@ -464,6 +502,46 @@ class App:
         log.info("调度就绪：常规 %d 分钟一轮；本次启动将做%s",
                  interval // 60000, "全量扫" if need_full else "常规扫")
 
+    # ---------- 全局热键 ----------
+
+    def _register_hotkey(self) -> None:
+        """Alt+Shift+C 全局唤起/隐藏小窗（被占用则静默跳过，托盘仍可用）。"""
+        import ctypes
+        try:
+            hwnd = int(self.widget.winId())
+            ok = ctypes.windll.user32.RegisterHotKey(
+                None if hwnd == 0 else hwnd, 1,
+                MOD_ALT | MOD_SHIFT, ord("C"))
+            if not ok:
+                log.warning("热键注册失败（可能被其他程序占用）：Alt+Shift+C")
+                return
+            self._hotkey_hwnd = hwnd
+            self._last_hotkey = 0.0
+            self._hotkey_filter = _HotkeyFilter(
+                lambda _id: self._on_hotkey())
+            self.qapp.installNativeEventFilter(self._hotkey_filter)
+            log.info("全局热键就绪：Alt+Shift+C 唤起小窗")
+        except Exception:
+            log.debug("热键不可用：%s", traceback.format_exc())
+
+    def _on_hotkey(self) -> None:
+        """防抖：合成键盘/系统重发会让一次按压产生两条 WM_HOTKEY，
+        连切两次等于没切。"""
+        import time
+        now = time.monotonic()
+        if now - self._last_hotkey < 0.4:
+            return
+        self._last_hotkey = now
+        self.toggle_widget()
+
+    def _unregister_hotkey(self) -> None:
+        try:
+            import ctypes
+            if getattr(self, "_hotkey_hwnd", None) is not None:
+                ctypes.windll.user32.UnregisterHotKey(self._hotkey_hwnd, 1)
+        except Exception:
+            pass
+
     # ---------- 动作 ----------
 
     def scan_now(self) -> None:
@@ -514,14 +592,15 @@ class App:
             self.notifier.toast_text("暂时打不开这份作业",
                                      "点 ⟳ 刷新作业列表后再试")
 
-    def _on_ignore_hw(self, course: str, title: str) -> None:
-        self.store.ignore_hw(course, title)
+    def _on_ignore_hw(self, course: str, title: str, url: str = "") -> None:
+        self.store.ignore_hw(course, title, url)
         self.store.save()
         self._refresh_ddl()
         self.notifier.toast_text("已从看板隐藏", "详情窗作业页底部可全部恢复")
 
     def _on_unignore_all(self) -> None:
-        n = self.store.unignore_hw_all()
+        n = self._ignored_count()   # 先算：名单里可能躺着陈年条目
+        self.store.unignore_hw_all()
         self.store.save()
         self._refresh_ddl()
         self.detail_bridge.settingsApplied.emit(f"已恢复 {n} 条作业")
@@ -543,11 +622,14 @@ class App:
         desktop = os.path.join(os.path.expanduser("~"), "Desktop")
         if not os.path.isdir(desktop):
             desktop = os.path.expanduser("~")
+        # parent 必须是 QWidget；detail_win 是 QQuickWindow，传了直接 TypeError
         path, _ = QFileDialog.getSaveFileName(
-            self.detail_win, "导出课表", os.path.join(desktop, "课表.ics"),
+            None, "导出课表", os.path.join(desktop, "课表.ics"),
             "日历文件 (*.ics)")
         if not path:
             return
+        if not path.lower().endswith(".ics"):
+            path += ".ics"   # 不自动补后缀，手机日历认不出无后缀文件
         try:
             with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(text)   # build_ics 已是 CRLF，newline="" 防二次转换
@@ -562,7 +644,8 @@ class App:
 
     def _ignored_count(self) -> int:
         from assistant.store import Store
-        keys = {Store.hw_key(r.get("course", ""), r.get("title", ""))
+        keys = {Store.hw_key(r.get("course", ""), r.get("title", ""),
+                             r.get("url", ""))
                 for r in self.store.get_deadlines()}
         return sum(1 for k in self.store.hw_ignores() if k in keys)
 
@@ -575,13 +658,15 @@ class App:
         self.detail_bridge.set_hw_ignored(n)
 
     def _on_hw_ready(self, items) -> None:
-        """worker 的作业结果（已按本学期课过滤）→ 详情窗看板。"""
+        """worker 的作业结果（已按本学期课过滤）→ 落库 + 详情窗看板。
+        落库让忽略/恢复操作有同一份最新数据可滤，不会回退到旧缓存。"""
         if items is None:
             self.detail_bridge.set_hw(None)
             return
-        rows = [dict(r) for r in items]
-        self.detail_bridge.set_hw(ddl_view(rows,
-                                           ignores=self.store.hw_ignores()))
+        self.store.set_deadlines([dict(r) for r in items])
+        rows = ddl_view(self.store.get_deadlines(),
+                        ignores=self.store.hw_ignores())
+        self.detail_bridge.set_hw(rows)
         self.detail_bridge.set_hw_ignored(self._ignored_count())
 
     def _save_detail_settings(self, merged: dict):
@@ -590,7 +675,7 @@ class App:
             merged["scan_interval_min"] = max(5, min(240,
                 int(merged.get("scan_interval_min", 30))))
             dnd = str(merged.get("dnd", "")).strip()
-            if dnd and ("-" not in dnd or len(dnd.split("-")) != 2):
+            if dnd and not re.fullmatch(r"\d{1,2}:\d{2}-\d{1,2}:\d{2}", dnd):
                 return False, "免打扰时段格式不对，应像 23:00-07:30"
             merged["dnd"] = dnd
             save_settings(merged)
@@ -648,6 +733,7 @@ class App:
 
     def quit(self) -> None:
         self.store.save()
+        self._unregister_hotkey()
         self.worker.stopping = True   # 让扫描循环尽快收尾
         self.worker_thread.quit()
         # 一轮扫描分钟级，等满 30s 防 QThread 活着被析构崩溃
@@ -705,10 +791,33 @@ def _screenshot_mode() -> int:
 
     def step(i: int):
         if i > 3:
-            app.quit()   # 走 App.quit：收 worker 线程+存盘，防析构竞态
+            detail_step(0)   # 小窗四页拍完 → 详情窗五页
             return
         app.bridge.set_tab(i)
         QTimer.singleShot(500, lambda: (shoot(f"{base}_t{i}.png"), step(i + 1)))
+
+    def grab_detail_win(path: str) -> None:
+        w = app.detail_win
+        w.raise_()
+        app.qapp.processEvents()
+        m = w.frameMargins()
+        img = w.screen().grabWindow(
+            0, int(w.x() - m.left()), int(w.y() - m.top()),
+            int(w.width() + m.left() + m.right()),
+            int(w.height() + m.top() + m.bottom()))
+        img.save(path)
+        print("saved:", path, img.width(), "x", img.height())
+
+    def detail_step(i: int):
+        if i > 4:
+            app.quit()   # 走 App.quit：收 worker 线程+存盘，防析构竞态
+            return
+        app.detail_bridge.gotoTab(i)
+        app.detail_win.show()
+        app.detail_win.raise_()
+        QTimer.singleShot(500,
+                          lambda: (grab_detail_win(f"{base}_d{i}.png"),
+                                   detail_step(i + 1)))
 
     def first():
         shoot(base + "_mini.png")

@@ -344,9 +344,12 @@ Item {
                         elide: Text.ElideRight
                     }
                     Text {
-                        text: "点击查看全部考试安排"
+                        // 副行：进行中放课程名，平时引导点击
+                        text: Bridge.examSub !== "" ? Bridge.examSub
+                              : "点击查看全部考试安排"
                         color: Ui.Theme.faint; font.pixelSize: 9
                         font.family: Ui.Theme.fontFamily
+                        elide: Text.ElideRight; width: parent.width
                     }
                 }
                 Rectangle {

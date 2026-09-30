@@ -79,7 +79,8 @@ class ReminderEngine:
                 if t2 > hit_threshold and not self._already(hw, k2):
                     self._mark(hw, k2)
             evt = {"kind": "reminder", "course": hw.get("course", ""),
-                   "title": hw.get("title", ""), "detail": "",
+                   "title": hw.get("title", ""),
+                   "url": hw.get("url", ""), "detail": "",
                    "tag": "截止", "priority": "high",
                    "reason": key}
             evt["silent"] = dnd or in_class   # 免打扰/上课中 → 只进时间线
