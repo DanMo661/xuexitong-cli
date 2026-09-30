@@ -66,17 +66,32 @@ def test_exam_summary():
         _exam_row("今天考", "2026-09-30 14:00", "2026-09-30 16:00"),
         _exam_row("下周考", "2026-10-07 09:00", "2026-10-07 11:00"),
     ], now=NOW), now=NOW)
-    text, cnt = exam_summary(view)
-    assert "今天考" in text and cnt == 2
+    text, cnt, ongoing = exam_summary(view)
+    assert "今天考" in text and "14:00" in text and cnt == 2 and not ongoing
     # 全结束 → 空横幅
     done = exams_view(parse_exam_rows(
         [_exam_row("旧", "2026-06-01 09:00", "2026-06-01 11:00")], now=NOW), now=NOW)
-    assert exam_summary(done) == ("", 0)
-    # 进行中 → 报结束时间
+    assert exam_summary(done) == ("", 0, False)
+    # 进行中 → 报结束时间 + ongoing 旗标（小窗横幅走红色紧急态）
     live = exams_view(parse_exam_rows(
         [_exam_row("进行中", "2026-09-30 10:00", "2026-09-30 12:30")], now=NOW), now=NOW)
-    text, _ = exam_summary(live)
-    assert "进行中" in text and "12:30" in text
+    text, _, ongoing = exam_summary(live)
+    assert "进行中" in text and "12:30" in text and ongoing
+
+
+def test_exams_cache_roundtrip_via_save():
+    """P0 回归：set_exams 存 datetime → save() 落盘 → 重读 → exams_view 不炸。"""
+    import json as _json
+    s = _store()
+    s.set_exams(parse_exam_rows(
+        [_exam_row("缓存考", "2026-10-12 14:00", "2026-10-12 16:00")], now=NOW))
+    s.save()   # datetime 未转 iso 时这里直接 TypeError
+    with open(s.path, encoding="utf-8") as f:
+        raw = _json.load(f)   # 文件本身必须是合法 JSON（曾截断在 "start": 处）
+    assert raw["exams_cache"]["rows"][0]["start"] == "2026-10-12T14:00:00"
+    s2 = Store(s.path)
+    view = exams_view(s2.get_exams(), now=NOW)
+    assert view[0]["name"] == "缓存考" and view[0]["state"] == "upcoming"
 
 
 # ---------------------------------------------------------------- 出分判定
@@ -118,6 +133,12 @@ def test_diff_hw_status():
     # 打回
     ch2 = s.diff_hw_status("c1", {"HW1": "未交", "HW2": "已完成", "HW3": "已交"})
     assert ch2 == [("HW3", "未交", "已交")]
+    # 瞬态空状态不入基线：真实状态到来时照常报（Judge A P2-4）
+    s2 = _store()
+    s2.diff_hw_status("c9", {"HW": ""})
+    assert s2.diff_hw_status("c9", {"HW": "已完成"}) == []   # 空没入基线，首见不报
+    s2.diff_hw_status("c9", {"HW": "已完成"})
+    assert s2.diff_hw_status("c9", {"HW": "已批阅"}) == [("HW", "已完成", "已批阅")]
 
 
 def test_diff_exams():
@@ -129,18 +150,31 @@ def test_diff_exams():
     assert s.diff_exams(["a|10-05", "b|10-02", "c|10-03"]) == ["a|10-05"]
 
 
-def test_notices_cache_roundtrip():
+def test_notices_cache_fields_and_read():
+    """真实字段 sendTime/createrName/isread('0'/'1' 字符串)（Judge A P1-1/2）。"""
     s = _store()
     s.set_notices([
-        {"title": "通知1", "sender": "张老师", "time": "2026-09-30 10:00:00",
-         "isread": 0, "content": "x" * 300},
-        {"title": "通知2", "sender": "学习通知", "time": "2026-09-29T09:00:00",
-         "isread": 1, "content": "hi"},
+        {"title": "通知1", "createrName": "张老师",
+         "sendTime": "2026-09-30 10:00:00", "isread": "0",
+         "uuid": "u1", "content": "x" * 600},
+        {"title": "通知2", "createrName": "学习通知",
+         "sendTime": "2026-09-29T09:00:00", "isread": "1",
+         "uuid": "u2", "content": "hi"},
     ])
     rows = s.get_notices()
-    assert len(rows) == 2
-    assert rows[0]["unread"] is True and rows[0]["content"] == "x" * 160
+    assert rows[0]["unread"] is True and rows[0]["sender"] == "张老师"
+    assert rows[0]["time"] == "2026-09-30 10:00" and len(rows[0]["content"]) == 500
+    assert rows[0]["key"] == "u1|通知1"
     assert rows[1]["unread"] is False and rows[1]["time"] == "2026-09-29 09:00"
+    # 本地已读：服务端未读但看过了 → 红点消
+    s.mark_notice_read("u1|通知1")
+    assert s.get_notices()[0]["unread"] is False
+    # 重拉后本地已读仍生效
+    s.set_notices([
+        {"title": "通知1", "createrName": "张老师",
+         "sendTime": "2026-09-30 10:00:00", "isread": "0",
+         "uuid": "u1", "content": "x"}])
+    assert s.get_notices()[0]["unread"] is False
 
 
 def test_progress_cache_date():
@@ -158,15 +192,27 @@ def test_progress_view_filter_and_sort():
         {"course": "数字图像处理", "done": 8, "total": 10, "error": None},
         {"course": "模拟电子技术", "done": 10, "total": 10, "error": None},
         {"course": "往年旧课", "done": 0, "total": 5, "error": None},
+        {"course": "尔雅网课", "done": 1, "total": 30, "error": None},
         {"course": "实践课(无章节)", "done": None, "total": None, "error": "无进度数据"},
     ]
     v = progress_view(rows, active_names={"数字图像处理", "模拟电子技术",
                                           "实践课(无章节)"})
     names = [r["course"] for r in v["rows"]]
-    # 往年课被滤掉；未完成在前、全完成次之、无数据垫底
+    # 往年课不进主列表也不进 other（没在课表且不在 other 未完成组？——不，
+    # 往年课有未完成，会进 otherRows；主列表只有课表内三课
     assert names == ["数字图像处理", "模拟电子技术", "实践课(无章节)"]
     assert v["totalLeft"] == 2 and v["coursesLeft"] == 1
     assert v["rows"][1]["left"] == 0 and v["rows"][2]["done"] is None
+    assert v["hasData"] is True
+    # otherRows：不在课表但有未完成的课（网课+往年课），按缺口排序
+    assert [r["course"] for r in v["otherRows"]] == ["尔雅网课", "往年旧课"]
+    # 全是 error 行时 hasData=False（"全部完成✓"不会误报）
+    v2 = progress_view([{"course": "A", "done": None, "total": None,
+                         "error": "x"}])
+    assert v2["hasData"] is False and v2["otherRows"] == []
+    # done>total 防溢出
+    v3 = progress_view([{"course": "B", "done": 12, "total": 10, "error": None}])
+    assert v3["rows"][0]["pct"] == 100
 
 
 def test_notices_view():

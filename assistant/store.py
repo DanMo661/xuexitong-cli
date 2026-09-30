@@ -131,7 +131,11 @@ class Store:
             return [] if fresh else added
 
     def diff_hw_status(self, cid: str, mapping: dict) -> list[tuple]:
-        """作业状态基线：返回 [(title, old, new)]；首见（old=None）不算变化。"""
+        """作业状态基线：返回 [(title, old, new)]；首见（old=None）不算变化。
+
+        瞬态空状态不入基线（页面解析抖动出空串会把真实状态挡在外面，
+        那次出分就永久漏报）——留到下轮拿到真状态再记。
+        """
         with self._lock:
             cs = self._data["courses"].setdefault(str(cid), {
                 "name": "", "homework_open": True, "seen_homework": [],
@@ -139,10 +143,13 @@ class Store:
             st = cs.setdefault("hw_status", {})
             changes = []
             for t, s in mapping.items():
+                s = s or ""
+                if not s:
+                    continue
                 old = st.get(t)
-                if old is not None and old != (s or ""):
-                    changes.append((t, old, s or ""))
-                st[t] = s or ""
+                if old is not None and old != s:
+                    changes.append((t, old, s))
+                st[t] = s
             if len(st) > 500:
                 cs["hw_status"] = dict(list(st.items())[-500:])
             return changes
@@ -159,8 +166,17 @@ class Store:
             return [] if fresh else added
 
     def set_exams(self, rows: list[dict]) -> None:
+        """落库前 datetime → iso 串（json.dump 不认 datetime，直存会炸掉
+        整个 store.save()——曾让持久化和退出全断，别再犯）。"""
+        out = []
+        for r in rows[:60]:
+            r = dict(r)
+            for k in ("start", "end"):
+                v = r.get(k)
+                r[k] = v.isoformat(timespec="seconds") if hasattr(v, "isoformat") else v
+            out.append(r)
         with self._lock:
-            self._data["exams_cache"] = {"rows": rows[:60],
+            self._data["exams_cache"] = {"rows": out,
                                          "saved_at": _now_iso()}
 
     def get_exams(self) -> list[dict]:
@@ -183,13 +199,42 @@ class Store:
             return (self._data.get("progress_cache") or {}).get("date", "")
 
     def set_notices(self, items: list) -> None:
-        rows = [{"title": n.get("title", ""), "sender": n.get("sender", ""),
-                 "time": (n.get("time", "") or "")[:16].replace("T", " "),
-                 "unread": not n.get("isread"),
-                 "content": (n.get("content", "") or "")[:160]}
-                for n in items[:40] if isinstance(n, dict)]
+        """通知缓存。真实字段是 sendTime/createrName/isread('0'/'1' 字符串)
+        （_explore/notice_list.json 实测），不是直觉的 time/sender。"""
+        rows = []
+        for n in items[:40]:
+            if not isinstance(n, dict):
+                continue
+            key = f"{n.get('uuid') or n.get('sendTime', '')}|{n.get('title', '')}"
+            unread_server = str(n.get("isread", "0")) == "0"
+            rows.append({
+                "key": key,
+                "title": n.get("title", ""),
+                "sender": n.get("createrName", "") or n.get("sender", ""),
+                "time": ((n.get("sendTime", "") or n.get("time", "") or "")
+                         [:16].replace("T", " ")),
+                # 未读 = 服务端未读 且 本地没点开过（在这看通知不会改服务端态）
+                "unread": unread_server and key not in self._notice_reads(),
+                "content": (n.get("content", "") or "")[:500],
+            })
         with self._lock:
             self._data["notices_cache"] = {"rows": rows, "saved_at": _now_iso()}
+
+    def _notice_reads(self) -> set:
+        with self._lock:
+            return set(self._data.get("notice_reads", []))
+
+    def mark_notice_read(self, key: str) -> None:
+        """本地已读一条通知（点开看过就算，红点即消）。"""
+        with self._lock:
+            reads = self._data.setdefault("notice_reads", [])
+            if key not in reads:
+                reads.append(key)
+            del reads[:-400]
+            cache = self._data.get("notices_cache") or {}
+            for r in cache.get("rows", []):
+                if r.get("key") == key:
+                    r["unread"] = False
 
     def get_notices(self) -> list[dict]:
         with self._lock:

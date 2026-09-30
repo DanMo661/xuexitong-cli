@@ -105,7 +105,9 @@ class Watcher:
 
         events += self._scan_exams()
         events += self._scan_notices()
-        self._maybe_progress(stop_check)
+        # 任务点总览只在每日全量基线扫时做（逐课查询重），常规轮巡不碰
+        if full:
+            self.refresh_progress(stop_check, courses)
         self.store.mark_scan(full=full)
         if events and self.on_events:
             try:
@@ -191,13 +193,16 @@ class Watcher:
         self.store.set_notices(items)   # 通知 tab 的缓存（读失败保旧）
         by_key: dict[str, dict] = {}
         for n in items:
-            key = f"{n.get('time', '')}|{n.get('title', '')}"
+            # 真实字段 sendTime/createrName（_explore/notice_list.json 实测），
+            # time/sender 不存在——用错字段 diff key 会退化成纯标题去重
+            key = f"{n.get('uuid') or n.get('sendTime', '')}|{n.get('title', '')}"
             by_key[key] = n
         for key in self.store.diff_notices(list(by_key.keys())):
             n = by_key.get(key, {})
-            verdict = classify_notice(n.get("title", ""), n.get("sender", ""),
+            sender = n.get("createrName", "") or n.get("sender", "")
+            verdict = classify_notice(n.get("title", ""), sender,
                                       n.get("content", ""))
-            events.append(self._evt("notice", n.get("course", n.get("sender", "")),
+            events.append(self._evt("notice", sender,
                                     n.get("title", key), verdict,
                                     detail=(n.get("content", "") or "")[:160]))
         return events
@@ -219,23 +224,45 @@ class Watcher:
             r = by_key.get(k)
             if not r:
                 continue
+            # title=考试名（时间线主行）；时间串进 detail，别倒挂
             events.append(self._evt(
-                "exam", r["name"],
-                f"{r['start'].strftime('%m-%d %H:%M')} 开考 · "
-                f"{r['durationMin']}分钟",
-                classify_exam(r["name"])))
+                "exam", "考试安排", r["name"], classify_exam(r["name"]),
+                detail=f"{r['start'].strftime('%m-%d %H:%M')} 开考 · "
+                       f"{r['durationMin']}分钟"))
         return events
 
-    def _maybe_progress(self, stop_check=None) -> None:
-        """任务点总览逐课查询很重（每课 1 请求）：每天第一轮刷一次。"""
+    def refresh_progress(self, stop_check=None, courses=None) -> bool:
+        """任务点总览：逐课查询重（每课 1-2 请求），限速 0.4s/课。
+
+        只在每日全量扫或用户手动刷新时跑；courses 缺省扫全部历史课
+        （网课不在课表里，恰好是任务点最重的）。中断（退出程序）时
+        不写缓存——半份数据会把"今天已刷"记死，整天不再重试。
+        返回是否完整写入。
+        """
         from datetime import datetime as _dt
         if self.store.progress_date == _dt.now().strftime("%Y-%m-%d"):
-            return
-        try:
-            self.store.set_progress(self.client.fetch_progress_overview(
-                stop_check=stop_check))
-        except Exception as e:
-            log.warning("任务点总览失败：%s", e)
+            return True
+        if courses is None:
+            courses = self.client.fetch_courses()
+        rows: list[dict] = []
+        for co in courses:
+            if stop_check and stop_check():
+                log.info("任务点总览被中断，丢弃半份数据")
+                return False
+            row = {"course": co["name"], "done": None, "total": None,
+                   "error": None}
+            try:
+                data = self.client.fetch_chapters(co, with_nodes=False)
+                if data["progress"]:
+                    row["done"], row["total"] = data["progress"]
+                else:
+                    row["error"] = "无进度数据"
+            except Exception as e:
+                row["error"] = " ".join(str(e).split())[:60]
+            rows.append(row)
+            time.sleep(0.4)
+        self.store.set_progress(rows)
+        return True
 
     def _score_detail(self, c: dict, hw: dict, title: str) -> str:
         """出分事件富化：尽力拉详情页拿"得分 X / 满分 Y"，失败返回空串。"""

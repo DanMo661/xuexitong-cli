@@ -14,20 +14,25 @@ class DetailBridge(QObject):
     noticesChanged = Signal()         # 通知中心列表
     tabRequested = Signal(int)        # python → QML：打开时落到指定页
     settingsApplied = Signal(str)     # python → QML：保存结果提示文案
+    refreshingChanged = Signal()      # 手动刷新进行中（⟳ 旋转反馈）
 
     def __init__(self, parent=None, settings=None, save_cb=None,
-                 refresh_hw_cb=None, refresh_extra_cb=None):
+                 refresh_hw_cb=None, refresh_extra_cb=None,
+                 notice_read_cb=None):
         super().__init__(parent)
         self._settings = dict(settings or {})
         self._save_cb = save_cb or (lambda d: None)
         self._refresh_hw_cb = refresh_hw_cb or (lambda: None)
         self._refresh_extra_cb = refresh_extra_cb or (lambda k: None)
+        self._notice_read_cb = notice_read_cb or (lambda k: None)
         self._timeline: list = []
         self._hw: list = []
         self._hw_failed = False
         self._exams: list = []
         self._notices: list = []
-        self._progress = {"rows": [], "totalLeft": 0, "coursesLeft": 0}
+        self._progress = {"rows": [], "otherRows": [], "totalLeft": 0,
+                          "coursesLeft": 0, "hasData": False, "date": ""}
+        self._refreshing = False
 
     # ---------- 数据注入（app 线程） ----------
 
@@ -39,6 +44,7 @@ class DetailBridge(QObject):
             rows.append({
                 "course": e.get("course", ""),
                 "title": e.get("title", ""),
+                "detail": (e.get("detail", "") or "")[:120],
                 "tag": e.get("tag", ""),
                 "priority": e.get("priority", "low"),
                 "time": (e.get("time", "") or "")[5:16].replace("T", " "),
@@ -73,6 +79,11 @@ class DetailBridge(QObject):
             self._progress = d
             self.examsChanged.emit()   # 任务点区挂在考试页，共用一个通知
 
+    def set_refreshing(self, on: bool) -> None:
+        if on != self._refreshing:
+            self._refreshing = on
+            self.refreshingChanged.emit()
+
     # ---------- QML 属性 ----------
 
     @Property("QVariantList", notify=timelineChanged)
@@ -92,6 +103,9 @@ class DetailBridge(QObject):
 
     @Property("QVariantMap", notify=examsChanged)
     def progress(self): return self._progress
+
+    @Property(bool, notify=refreshingChanged)
+    def refreshing(self): return self._refreshing
 
     @Property("QVariantMap", constant=True)
     def settings(self): return self._settings
@@ -115,8 +129,13 @@ class DetailBridge(QObject):
 
     @Slot(str)
     def refreshExtra(self, kind: str) -> None:
-        """kind: exams / notices / progress（worker 线程取数，回 UI 渲染）。"""
+        """kind: exams / exams_progress / notices / progress（worker 取数）。"""
+        self.set_refreshing(True)
         self._refresh_extra_cb(str(kind))
+
+    @Slot(str)
+    def markNoticeRead(self, key: str) -> None:
+        self._notice_read_cb(str(key))
 
     @Slot(int)
     def gotoTab(self, tab: int) -> None:

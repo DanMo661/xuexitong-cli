@@ -69,7 +69,7 @@ Window {
                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         if (bar.currentIndex === 1) DBridge.refreshHw()
-                        else if (bar.currentIndex === 2) DBridge.refreshExtra("exams")
+                        else if (bar.currentIndex === 2) DBridge.refreshExtra("exams_progress")
                         else if (bar.currentIndex === 3) DBridge.refreshExtra("notices")
                     }
                 }
@@ -123,6 +123,7 @@ Window {
     // ===== 保存提示条 =====
     Rectangle {
         id: toast
+        z: 10   // 盖在页面区上（StackLayout 声明在后，不提层会被白卡压住）
         visible: toastTxt.text !== ""
         anchors.top: head.bottom; anchors.topMargin: 8
         anchors.left: head.left; anchors.right: head.right
@@ -162,7 +163,11 @@ Window {
                 Repeater {
                     model: DBridge.timeline
                     delegate: Rectangle {
-                        width: tlCol.width; height: 52
+                        id: tlCard
+                        width: tlCol.width
+                        readonly property bool hasDetail:
+                            (modelData.detail || "") !== ""
+                        height: hasDetail ? 64 : 52
                         radius: Ui.Theme.radiusMd
                         color: "#FFFFFF"
                         border.width: 1; border.color: Ui.Theme.border
@@ -197,6 +202,15 @@ Window {
                                 width: parent.width
                                 text: modelData.title
                                 color: Ui.Theme.fg; font.pixelSize: 12
+                                font.family: Ui.Theme.fontFamily
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                visible: tlCard.hasDetail
+                                width: parent.width
+                                text: modelData.detail
+                                color: Ui.Theme.primary; font.pixelSize: 10
+                                font.weight: Font.Medium
                                 font.family: Ui.Theme.fontFamily
                                 elide: Text.ElideRight
                             }

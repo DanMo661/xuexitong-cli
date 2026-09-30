@@ -96,6 +96,7 @@ class ScanWorker(QObject):
         self.watcher = Watcher(client, store)
         self.engine = ReminderEngine(store, settings)
         self._busy = False
+        self._extra_busy: set[str] = set()   # 手动刷新去重：连点不叠加扫描
         self.stopping = False            # 退出旗标：扫描循环尽快收尾
         # 跨线程信号连接：moveToThread 后这些槽在 worker 线程执行
         self.trigger.connect(self._on_trigger)
@@ -115,20 +116,28 @@ class ScanWorker(QObject):
         self.hw_ready.emit(items)
 
     def _on_extras_request(self, kind: str) -> None:
-        """详情窗手动刷新：worker 线程拉数写缓存，完成后回 UI 重推。"""
+        """详情窗手动刷新：worker 线程拉数写缓存，完成后回 UI 重推。
+
+        同类请求在跑时直接忽略（任务点逐课查询要十几秒，连点会叠加）。
+        """
+        if kind in self._extra_busy:
+            return
+        self._extra_busy.add(kind)
         ok = True
         try:
-            if kind == "exams":
+            if kind == "exams" or kind == "exams_progress":
                 self.store.set_exams(parse_exam_rows(self.client.fetch_exams()))
             elif kind == "notices":
                 items = self.client.fetch_notices(limit=30)
                 self.store.set_notices(items if isinstance(items, list) else [])
             elif kind == "progress":
-                self.store.set_progress(self.client.fetch_progress_overview(
-                    stop_check=lambda: self.stopping))
+                self.watcher.refresh_progress(
+                    stop_check=lambda: self.stopping)
         except Exception:
             log.debug("extras 拉取失败 %s：%s", kind, traceback.format_exc())
             ok = False
+        finally:
+            self._extra_busy.discard(kind)
         self.extras_ready.emit(kind, ok)
 
     def do_scan(self, full: bool = False) -> None:
@@ -165,8 +174,11 @@ class ScanWorker(QObject):
         if highs:
             n = len(highs)
             title = f"学习通有 {n} 条新动态" if n > 1 else "学习通新动态"
-            body = "\n".join(f"【{e.get('tag')}】{e.get('course')} "
-                             f"{e.get('title')}" for e in highs[:4])
+            body = "\n".join(
+                f"【{e.get('tag')}】{e.get('course')} {e.get('title')}"
+                + (f" · {e['detail']}" if e.get("detail")
+                   and e.get("kind") == "hwscore" else "")
+                for e in highs[:4])
             self.toast_request.emit(title, body)
             if self.settings.get("email_enabled"):
                 self.notifier.send_email(highs)
@@ -239,7 +251,8 @@ class App:
             settings=self.settings,
             save_cb=self._save_detail_settings,
             refresh_hw_cb=lambda: self.worker.hw_request.emit(),
-            refresh_extra_cb=lambda k: self.worker.extras_request.emit(k))
+            refresh_extra_cb=lambda k: self.worker.extras_request.emit(k),
+            notice_read_cb=self._on_notice_read)
         self.engine = QQmlApplicationEngine()
         self.engine.addImportPath(str(QML_DIR))
         self.engine.rootContext().setContextProperty("Bridge", self.bridge)
@@ -287,11 +300,12 @@ class App:
         """考试/通知/任务点（纯缓存计算）→ 小窗摘要 + 详情窗列表。"""
         try:
             view = exams_view(self.store.get_exams())
-            text, cnt = exam_summary(view)
+            text, cnt, ongoing = exam_summary(view)
             pv = progress_view(self.store.get_progress(),
                                active_course_names(self.store) or None)
-            self.bridge.set_extras(text, cnt, pv["totalLeft"],
-                                   pv["coursesLeft"])
+            pv["date"] = self.store.progress_date
+            self.bridge.set_extras(text, cnt, ongoing,
+                                   pv["totalLeft"], pv["coursesLeft"])
             self.detail_bridge.set_exams(view)
             self.detail_bridge.set_progress(pv)
             self.detail_bridge.set_notices(notices_view(self.store.get_notices()))
@@ -370,9 +384,15 @@ class App:
         self.worker.extras_ready.connect(self._on_extras_ready)
 
     def _on_extras_ready(self, kind: str, ok: bool) -> None:
+        self.detail_bridge.set_refreshing(False)
         self._push_extras()
         self.detail_bridge.settingsApplied.emit(
             "已刷新" if ok else "刷新失败，稍后再试")
+
+    def _on_notice_read(self, key: str) -> None:
+        self.store.mark_notice_read(key)
+        self.store.save()
+        self._push_extras()
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(tray_icon())
@@ -424,7 +444,8 @@ class App:
         self.detail_win.show()
         self.detail_win.raise_()
         self.detail_win.requestActivate()
-        self.worker.hw_request.emit()   # 打开即拉最新作业
+        if idx <= 1:   # 只有动态/作业页吃作业数据，从考试/通知进来别白拉
+            self.worker.hw_request.emit()
         self.detail_bridge.set_timeline(self.store.timeline(limit=60))
         self._push_extras()
 

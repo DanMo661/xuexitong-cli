@@ -206,27 +206,36 @@ def exams_view(rows: list[dict], now: datetime | None = None,
     """考试行 → QML 行：进行中 → 未考（近→远）→ 已结束（近→远）沉底。
 
     输出只带标签文本（datetime 不进 QML，绑定里没法做字符串运算）。
+    输入兼容 datetime 与 iso 串（store 落盘后再读出来是串）。
     """
     now = now or datetime.now()
     view = []
     for r in rows:
-        if r["start"] <= now <= r["end"]:
+        start = _as_dt(r.get("start"))
+        end = _as_dt(r.get("end")) or start
+        if start is None:
+            continue
+        if start <= now <= end:
             state = "ongoing"
-        elif r["start"] > now:
+        elif start > now:
             state = "upcoming"
         else:
             state = "done"
-        days = (r["start"].date() - now.date()).days
+        days = (start.date() - now.date()).days
         label = {0: "今天", 1: "明天"}.get(days, f"{days} 天后") \
             if state == "upcoming" else ""
+        score = (r.get("score") or "").strip()
         view.append({
-            "name": r["name"],
-            "startLabel": r["start"].strftime("%m-%d %H:%M"),
-            "endLabel": r["end"].strftime(
-                "%H:%M" if r["end"].date() == r["start"].date()
-                else "%m-%d %H:%M"),
-            "durationMin": r["durationMin"], "status": r["status"],
-            "answer": r["answer"], "score": r["score"], "mode": r["mode"],
+            "name": r.get("name", ""),
+            "startLabel": start.strftime("%m-%d %H:%M"),
+            "startClock": start.strftime("%H:%M"),
+            "endLabel": end.strftime(
+                "%H:%M" if end.date() == start.date() else "%m-%d %H:%M"),
+            "durationMin": r.get("durationMin", ""),
+            "status": r.get("status", ""), "answer": r.get("answer", ""),
+            # 分数列 "---" 表示没成绩；数字才透传给 UI 显示
+            "scoreNum": score if _re.match(r"^\d+(\.\d+)?$", score) else "",
+            "mode": r.get("mode", ""),
             "state": state, "days": days, "daysLabel": label,
         })
 
@@ -239,53 +248,75 @@ def exams_view(rows: list[dict], now: datetime | None = None,
     return view[:limit]
 
 
-def exam_summary(view: list[dict]) -> tuple[str, int]:
-    """Today 页横幅：最近一场未考/进行中考试一句话 + 待考总数。"""
+def _as_dt(v):
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, str) and v:
+        try:
+            return datetime.fromisoformat(v)
+        except ValueError:
+            return None
+    return None
+
+
+def exam_summary(view: list[dict]) -> tuple[str, int, bool]:
+    """Today 页横幅：一句话 + 待考总数 + 是否进行中（进行中走红色紧急态）。"""
     live = [v for v in view if v["state"] in ("upcoming", "ongoing")]
     if not live:
-        return "", 0
+        return "", 0, False
     first = live[0]
     if first["state"] == "ongoing":
         text = f"《{first['name']}》考试进行中 · {first['endLabel']} 结束"
-    elif first["days"] == 0:
-        text = f"《{first['name']}》今天开考"
+        return text, len(live), True
+    if first["days"] == 0:
+        text = f"《{first['name']}》今天 {first['startClock']} 开考"
     else:
         text = f"距《{first['name']}》还有 {first['days']} 天"
-    return text, len(live)
+    return text, len(live), False
 
 
 def notices_view(rows: list[dict]) -> list[dict]:
-    """store 通知缓存 → QML 行（title/sender/time/unread/content）。"""
-    return [{"title": r.get("title", ""), "sender": r.get("sender", ""),
-             "time": r.get("time", ""), "unread": bool(r.get("unread")),
+    """store 通知缓存 → QML 行（key/title/sender/time/unread/content）。"""
+    return [{"key": r.get("key", ""), "title": r.get("title", ""),
+             "sender": r.get("sender", ""), "time": r.get("time", ""),
+             "unread": bool(r.get("unread")),
              "content": r.get("content", "")} for r in rows]
 
 
 def progress_view(rows: list[dict],
                   active_names: set[str] | None = None) -> dict:
-    """任务点总览 → {rows, totalLeft, coursesLeft}：未完成多的在前，
-    全完成的沉底淡化，无数据（未开放章节）的垫底。只统计本学期课。"""
-    out = []
+    """任务点总览 → {rows, otherRows, totalLeft, coursesLeft, hasData}。
+
+    本学期课表内的课是主列表（未完成多的在前，全完成沉底淡化）；
+    不在课表但还有未完成的课（网课/纯线上选修）单独成组、不计入
+    Today 概览的缺口数——往年课不刷不该天天挂脸上，但网课漏刷得看见。
+    """
+    out, other = [], []
     for r in rows:
         course = r.get("course", "")
-        if active_names and not _course_match(course, active_names):
-            continue
+        in_terms = not active_names or _course_match(course, active_names)
         done, total = r.get("done"), r.get("total")
         if done is None or total is None:
-            out.append({"course": course, "done": None, "total": None,
-                        "left": 0, "pct": 0, "error": r.get("error") or ""})
-            continue
-        left = max(0, int(total) - int(done))
-        pct = int(int(done) * 100 / total) if total else 100
-        out.append({"course": course, "done": int(done), "total": int(total),
-                    "left": left, "pct": pct, "error": ""})
+            row = {"course": course, "done": None, "total": None,
+                   "left": 0, "pct": 0, "error": r.get("error") or ""}
+        else:
+            left = max(0, int(total) - int(done))
+            pct = min(100, int(int(done) * 100 / total)) if total else 100
+            row = {"course": course, "done": int(done), "total": int(total),
+                   "left": left, "pct": pct, "error": ""}
+        (out if in_terms else other).append(row)
     todo = sorted((r for r in out if r["done"] is not None and r["left"] > 0),
                   key=lambda r: -r["left"])
     done_rows = [r for r in out if r["done"] is not None and r["left"] == 0]
     err_rows = [r for r in out if r["done"] is None]
+    other_todo = sorted((r for r in other
+                         if r["done"] is not None and r["left"] > 0),
+                        key=lambda r: -r["left"])[:5]
     return {"rows": todo + done_rows + err_rows,
+            "otherRows": other_todo,
             "totalLeft": sum(r["left"] for r in todo),
-            "coursesLeft": len(todo)}
+            "coursesLeft": len(todo),
+            "hasData": any(r["done"] is not None for r in out)}
 
 
 # ---------- 周视图网格（纯课表缓存计算，UI 线程可直接调） ----------

@@ -66,7 +66,7 @@ Item {
                             + Bridge.dayDone + " · 还剩 "
                             + (Bridge.dayTotal - Bridge.dayDone)
                             + (Bridge.progressLeft > 0
-                               ? " · 任务点缺 " + Bridge.progressLeft : "")
+                               ? " · 任务点还差 " + Bridge.progressLeft + " 个" : "")
                           : "任务点还差 " + Bridge.progressLeft + " 个没刷完"
                     color: Ui.Theme.muted; font.pixelSize: 11
                     font.family: Ui.Theme.fontFamily
@@ -313,21 +313,23 @@ Item {
                 visible: Bridge.examSummary !== ""
                 width: parent.width; height: 48; radius: Ui.Theme.radiusMd
                 color: "#FFFFFF"
-                border.width: 1; border.color: Ui.Theme.border
+                border.width: 1
+                border.color: Bridge.examOngoing ? Ui.Theme.danger : Ui.Theme.border
                 Rectangle {
                     x: 10; anchors.verticalCenter: parent.verticalCenter
                     width: 3; height: 22; radius: 1.5
-                    color: Ui.Theme.warn
+                    color: Bridge.examOngoing ? Ui.Theme.danger : Ui.Theme.warn
                 }
-                // 考试图标块（与课程色块同规格，暖色区分"不是课"）
+                // 考试图标块（与课程色块同规格；进行中红/平时暖色）
                 Rectangle {
                     x: 22; anchors.verticalCenter: parent.verticalCenter
                     width: 30; height: 30; radius: 9
-                    color: Ui.Theme.warnSoft
+                    color: Bridge.examOngoing ? Ui.Theme.dangerSoft : Ui.Theme.warnSoft
                     border.width: 1; border.color: Ui.Theme.border
                     Text {
                         anchors.centerIn: parent; text: "考"
-                        color: Ui.Theme.warn; font.pixelSize: 13; font.bold: true
+                        color: Bridge.examOngoing ? Ui.Theme.danger : Ui.Theme.warn
+                        font.pixelSize: 13; font.bold: true
                         font.family: Ui.Theme.fontFamily
                     }
                 }
@@ -352,12 +354,13 @@ Item {
                     anchors.right: parent.right; anchors.rightMargin: 12
                     anchors.verticalCenter: parent.verticalCenter
                     width: examChipTxt.width + 14; height: 20; radius: 10
-                    color: Ui.Theme.warnSoft
+                    color: Bridge.examOngoing ? Ui.Theme.dangerSoft : Ui.Theme.warnSoft
                     Text {
                         id: examChipTxt
                         anchors.centerIn: parent
                         text: Bridge.examCount + " 场"
-                        color: Ui.Theme.warn; font.pixelSize: 10; font.weight: Font.Medium
+                        color: Bridge.examOngoing ? Ui.Theme.danger : Ui.Theme.warn
+                        font.pixelSize: 10; font.weight: Font.Medium
                         font.family: Ui.Theme.fontFamily
                     }
                 }

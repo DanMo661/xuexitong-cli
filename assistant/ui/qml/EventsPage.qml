@@ -48,7 +48,11 @@ Item {
                 model: Bridge.events
                 delegate: Item {
                     id: evItem
-                    width: col.width; height: 46
+                    width: col.width
+                    // 有附加信息（出分分数/考试时间）的条目高一档
+                    readonly property bool hasDetail:
+                        (modelData.detail || "") !== ""
+                    height: hasDetail ? 58 : 46
                     opacity: 0
                     Component.onCompleted: stagger.start()
                     SequentialAnimation {
@@ -62,7 +66,8 @@ Item {
 
                     Rectangle {
                         id: evRow
-                        width: parent.width; height: 44
+                        width: parent.width
+                        height: evItem.hasDetail ? 56 : 44
                         anchors.verticalCenter: parent.verticalCenter
                         radius: Ui.Theme.radiusMd
                         color: "#FFFFFF"
@@ -130,6 +135,17 @@ Item {
                                     width: parent.width
                                     text: modelData.title
                                     color: Ui.Theme.fg; font.pixelSize: 11
+                                    font.family: Ui.Theme.fontFamily
+                                    elide: Text.ElideRight
+                                }
+                                // 附加信息行：出分"得分 92 / 满分 100"、
+                                // 考试"10-12 14:00 开考 · 120分钟"——主色点睛
+                                Text {
+                                    visible: evItem.hasDetail
+                                    width: parent.width
+                                    text: modelData.detail
+                                    color: Ui.Theme.primary; font.pixelSize: 10
+                                    font.weight: Font.Medium
                                     font.family: Ui.Theme.fontFamily
                                     elide: Text.ElideRight
                                 }

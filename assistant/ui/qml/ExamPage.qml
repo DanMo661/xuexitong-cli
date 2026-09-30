@@ -93,11 +93,16 @@ Item {
                         }
                         Text {
                             width: parent.width
-                            text: modelData.startLabel + " 开考 · "
-                                  + modelData.durationMin + " 分钟"
-                                  + (modelData.mode && modelData.mode !== "未设置终端"
-                                     ? " · " + modelData.mode : "")
-                            color: Ui.Theme.muted; font.pixelSize: 10
+                            // 进行中的考试最有用的信息是几点结束
+                            text: modelData.state === "ongoing"
+                                  ? "至 " + modelData.endLabel + " 结束"
+                                  : modelData.startLabel + " 开考 · "
+                                    + modelData.durationMin + " 分钟"
+                                    + (modelData.mode && modelData.mode !== "未设置终端"
+                                       ? " · " + modelData.mode : "")
+                            color: modelData.state === "ongoing" ? Ui.Theme.danger
+                                   : Ui.Theme.muted
+                            font.pixelSize: 10
                             font.family: Ui.Theme.fontFamily
                             elide: Text.ElideRight
                         }
@@ -107,17 +112,23 @@ Item {
                         anchors.right: parent.right; anchors.rightMargin: 12
                         anchors.verticalCenter: parent.verticalCenter
                         width: pillTxt.width + 14; height: 22; radius: 11
-                        color: modelData.state === "ongoing" ? Ui.Theme.dangerSoft
+                        // 已结束且有分数 → 绿底数字（考试看板的核心遗留价值）
+                        color: modelData.state === "done" && modelData.scoreNum !== ""
+                               ? Ui.Theme.okSoft
+                               : modelData.state === "ongoing" ? Ui.Theme.dangerSoft
                                : modelData.state === "done" ? Ui.Theme.secondary
                                : modelData.days <= 3 ? Ui.Theme.warnSoft
                                : Ui.Theme.primarySoft
                         Text {
                             id: pillTxt
                             anchors.centerIn: parent
-                            text: modelData.state === "ongoing" ? "进行中"
-                                  : modelData.state === "done" ? "已结束"
+                            text: modelData.state === "done"
+                                  ? (modelData.scoreNum !== "" ? modelData.scoreNum + " 分" : "已结束")
+                                  : modelData.state === "ongoing" ? "进行中"
                                   : modelData.daysLabel
-                            color: modelData.state === "ongoing" ? Ui.Theme.danger
+                            color: modelData.state === "done" && modelData.scoreNum !== ""
+                                   ? Ui.Theme.ok
+                                   : modelData.state === "ongoing" ? Ui.Theme.danger
                                    : modelData.state === "done" ? Ui.Theme.faint
                                    : modelData.days <= 3 ? Ui.Theme.warn
                                    : Ui.Theme.primary
@@ -165,8 +176,15 @@ Item {
                     border.width: 1; border.color: Ui.Theme.borderSoft
                     Text {
                         anchors.centerIn: parent; text: "⟳"
-                        color: pgHover.hovered ? Ui.Theme.fg : Ui.Theme.muted
+                        color: pgHover.hovered || DBridge.refreshing
+                               ? Ui.Theme.fg : Ui.Theme.muted
                         font.pixelSize: 12; font.family: Ui.Theme.fontFamily
+                        RotationAnimation on rotation {
+                            running: DBridge.refreshing
+                            loops: Animation.Infinite
+                            from: 0; to: 360; duration: 900
+                            alwaysRunToEnd: true
+                        }
                     }
                     HoverHandler { id: pgHover }
                     MouseArea {
@@ -193,10 +211,20 @@ Item {
                         font.family: Ui.Theme.fontFamily
                     }
                     Text {
-                        visible: DBridge.progress.rows.length > 0
+                        // 有数据且全完成才敢说"全部完成"（全是 error 行时不算）
+                        visible: DBridge.progress.hasData === true
                                  && DBridge.progress.totalLeft === 0
                         text: "本学期课程任务点全部完成 ✓"
                         color: Ui.Theme.ok; font.pixelSize: 11
+                        font.family: Ui.Theme.fontFamily
+                    }
+                    // 数据陈旧度：每天一刷，隔天的缺口数别让人误会
+                    Text {
+                        visible: DBridge.progress.date !== ""
+                                 && DBridge.progress.date
+                                     !== Qt.formatDateTime(new Date(), "yyyy-MM-dd")
+                        text: "（数据截至 " + DBridge.progress.date.substring(5) + "）"
+                        color: Ui.Theme.faint; font.pixelSize: 9
                         font.family: Ui.Theme.fontFamily
                     }
 
@@ -204,7 +232,9 @@ Item {
                         model: DBridge.progress.rows
                         delegate: Column {
                             width: pgCol.width; spacing: 4
-                            opacity: modelData.done === null ? 0.55 : 1
+                            // 注意 == null：Python None 进 QML 是 undefined
+                            //（=== null 永假，无数据课会被当"完成"渲染）
+                            opacity: modelData.done == null ? 0.55 : 1
                             // 定位器（Row/Column）里不能用 anchors，行结构用 Item 摆
                             Item {
                                 width: parent.width; height: 16
@@ -219,11 +249,11 @@ Item {
                                 Text {
                                     anchors.right: parent.right
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: modelData.done === null ? "无数据"
+                                    text: modelData.done == null ? "无数据"
                                           : modelData.left > 0
                                             ? "差 " + modelData.left + " 个"
                                             : "完成 ✓"
-                                    color: modelData.done === null ? Ui.Theme.faint
+                                    color: modelData.done == null ? Ui.Theme.faint
                                            : modelData.left > 0 ? Ui.Theme.warn
                                            : Ui.Theme.ok
                                     font.pixelSize: 10; font.weight: Font.Medium
@@ -232,7 +262,7 @@ Item {
                             }
                             // 细进度条（未完成多的课程一眼可见）
                             Rectangle {
-                                visible: modelData.done !== null
+                                visible: modelData.done != null
                                 width: parent.width; height: 4; radius: 2
                                 color: Ui.Theme.secondary
                                 Rectangle {
@@ -241,6 +271,36 @@ Item {
                                     color: modelData.left > 0 ? Ui.Theme.primary
                                            : Ui.Theme.ok
                                 }
+                            }
+                        }
+                    }
+
+                    // 不在课表但有未完成的课（网课/纯线上选修——任务点重灾区）
+                    Text {
+                        visible: DBridge.progress.otherRows.length > 0
+                        text: "不在课表的课（网课等）"
+                        color: Ui.Theme.muted; font.pixelSize: 10
+                        font.family: Ui.Theme.fontFamily
+                    }
+                    Repeater {
+                        model: DBridge.progress.otherRows
+                        delegate: Item {
+                            width: pgCol.width; height: 16
+                            Text {
+                                x: 0; width: parent.width - 100
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.course
+                                color: Ui.Theme.muted; font.pixelSize: 10
+                                font.family: Ui.Theme.fontFamily
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "差 " + modelData.left + " 个"
+                                color: Ui.Theme.warn; font.pixelSize: 10
+                                font.weight: Font.Medium
+                                font.family: Ui.Theme.fontFamily
                             }
                         }
                     }

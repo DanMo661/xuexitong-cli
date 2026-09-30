@@ -22,6 +22,7 @@ QtObject {
 
     // 语义色
     readonly property color ok: "#16A34A"
+    readonly property color okSoft: Qt.rgba(0.086, 0.639, 0.290, 0.10)
     readonly property color danger: "#EF4444"
     readonly property color dangerSoft: Qt.rgba(0.937, 0.267, 0.267, 0.10)
     readonly property color warn: "#C97A16"

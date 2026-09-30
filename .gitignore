@@ -32,3 +32,5 @@ widget_geometry.json
 /_debug_*
 /analyze_ghost.py
 /_snap_ccswitch.ps1
+/_r1_*.py
+store.json.tmp

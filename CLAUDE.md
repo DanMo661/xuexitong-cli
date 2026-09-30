@@ -21,8 +21,11 @@ assistant/
   notify.py      # 通知通道：Windows Toast + 可选邮件
   snapshot.py    # 快照组装：今日课（week_lessons 按周过滤！）/周网格/DDL 视图
   ui/
-    app 装配 QML 引擎；bridge.py=数据桥；detail.py=详情窗(QWidget)；theme.py=详情窗色板
-    qml/         # Main.qml(壳) + TodayPage/WeekPage/HwPage/EventsPage + Theme 单例
+    app 装配 QML 引擎；bridge.py=小窗数据桥；detail_bridge.py=详情窗桥；
+    detail.py=settings.json 读写与自启注册；theme.py=色板
+    qml/         # Main.qml(壳) + TodayPage/WeekPage/HwPage/EventsPage
+                 # + DetailWindow.qml(动态/作业/考试/通知/设置)
+                 # + ExamPage/NoticePage + Theme 单例
 ```
 
 ## 硬约束
@@ -42,11 +45,21 @@ assistant/
   边框 #E4E4E7、主色 #1F8FFF 只点缀当前项/交互态、muted #6E6E76、
   danger #EF4444；改色先读 `docs/调研-桌面课程小组件-20260928.md`
 - **小窗结构**：迷你条(360×64)点击展开(360×540)=顶栏+四标签页
-  （今天/课表/作业/动态）+页脚；课程行手风琴展开；周网格今天列高亮
+  （今天/课表/作业/动态）+页脚；课程行手风琴展开；周网格今天列高亮；
+  Today 页考试横幅（有待考才出现）
+- **详情窗 = QML DetailWindow.qml 五标签页**（动态/作业/考试/通知/设置，
+  assistant/ui/detail_bridge.py 桥接）；考试页下半区挂任务点完成度
 - **动效**：进场弹 220-260ms（BezierCurve ccEnter/popBack）、退场快 150ms、
   spring 3.5/0.14；模型级数据不变不重发信号（防每分钟闪烁）
 - **课表数据纪律**：全学期缓存按 `weeks` 周次串过滤后才喂 lesson_rows
   （`snapshot.week_lessons`），空周=真空（考试周不显示幽灵课）
+- **QML 纪律（踩过的坑）**：定位器(Row/Column)子项禁用 anchors（整行文字
+  会消失）；帧内控件 Menu/Popup 会幽灵半开（自绘菜单）；离屏 grabWindow
+  拿空帧（截图必须屏幕合成+置顶）；Row 里的固定宽 spacer 会把右端按钮
+  挤出窗口（锚右）
+- **巡检增量源**（store 基线，全部首见不报）：作业标题 / 资料data_id /
+  通知key / 考试key(name|时间) / 作业状态(diff_hw_status→出分/打回)；
+  任务点总览每日一次（fetch_progress_overview 重，stop_check 可中断）
 
 ## 代码约定
 
@@ -59,6 +72,7 @@ assistant/
 ## 验证
 
 - `python tests/run_tests.py`：协议层单测（保持全绿）
+- `python tests/test_assistant.py`：assistant 侧单测（考试/出分/任务点/基线）
 - `python -m assistant.watch --once --headless`：单轮巡检冒烟
 - `python -m assistant.app --screenshot out.png`：迷你+四页截图（屏幕合成，
   产物 out_mini/t0..t3.png）

@@ -69,6 +69,7 @@ class Bridge(QObject):
         self._synced = True            # 课表缓存是否可用（未同步别装"没课"）
         self._exam_summary = ""        # Today 页考试横幅（空=无待考）
         self._exam_count = 0
+        self._exam_ongoing = False     # 最近一场考试正在进行（横幅红色紧急态）
         self._progress_left = 0        # 任务点未完成总数（0=不显示）
         self._progress_courses = 0
 
@@ -132,6 +133,7 @@ class Bridge(QObject):
         rows = [{
             "course": e.get("course", ""),
             "title": e.get("title", ""),
+            "detail": (e.get("detail", "") or "")[:120],
             "tag": e.get("tag", ""),
             "priority": e.get("priority", "low"),
             "time": (e.get("time", "") or "")[5:16].replace("T", " "),
@@ -161,13 +163,16 @@ class Bridge(QObject):
         self.scanningChanged.emit()
 
     def set_extras(self, exam_summary: str, exam_count: int,
-                   progress_left: int, progress_courses: int) -> None:
+                   exam_ongoing: bool, progress_left: int,
+                   progress_courses: int) -> None:
         """Today 页摘要（考试横幅 + 任务点缺口）；没变不 emit 防闪烁。"""
-        if (exam_summary, exam_count, progress_left, progress_courses) != \
-                (self._exam_summary, self._exam_count,
-                 self._progress_left, self._progress_courses):
+        if (exam_summary, exam_count, exam_ongoing, progress_left,
+                progress_courses) != (
+                self._exam_summary, self._exam_count, self._exam_ongoing,
+                self._progress_left, self._progress_courses):
             self._exam_summary = exam_summary
             self._exam_count = exam_count
+            self._exam_ongoing = exam_ongoing
             self._progress_left = progress_left
             self._progress_courses = progress_courses
             self.extrasChanged.emit()
@@ -233,6 +238,9 @@ class Bridge(QObject):
 
     @Property(int, notify=extrasChanged)
     def examCount(self): return self._exam_count
+
+    @Property(bool, notify=extrasChanged)
+    def examOngoing(self): return self._exam_ongoing
 
     @Property(int, notify=extrasChanged)
     def progressLeft(self): return self._progress_left
