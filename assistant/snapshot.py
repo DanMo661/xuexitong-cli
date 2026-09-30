@@ -386,6 +386,7 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
             "nodeLabels": [], "nodeTimes": [], "currentNode": -1,
             "nowLine": -1.0, "blocks": []}
     if not lessons:
+        base["week"] = 0   # 空缓存也是"学期未同步"，别装第 1 周
         return base
     fw0 = cur.get("firstWeekDate") or cur.get("firstWeekDateReal")
     # 无学期锚点：week=0（UI 显示"学期未同步"，别装第 1 周误导）
@@ -437,12 +438,15 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
         for n in range(1, max_node + 1)]
     base["blocks"] = blocks
 
-    # 当前节次（时间轨胶囊高亮）+ 时间红线（节内进度换算成行坐标）
+    # 当前节次（时间轨胶囊高亮）+ 时间红线。都用节次表的真实下课时间：
+    # 用"下一节 start"兜底会把午休/课间空档摊进上一节，红线在空档里
+    # 缓慢爬行像"这节课还没上完"——空档就不画线，诚实
     if offset == 0 and in_term and times:
         cur_min = now.hour * 60 + now.minute
         starts = [t[0].hour * 60 + t[0].minute for t in times[:max_node]]
+        ends = [t[1].hour * 60 + t[1].minute for t in times[:max_node]]
         for i, s in enumerate(starts):
-            e = starts[i + 1] if i + 1 < len(starts) else s + 45
+            e = ends[i] if i < len(ends) and ends[i] > s else s + 45
             if s <= cur_min < e:
                 base["currentNode"] = i
                 base["nowLine"] = i + (cur_min - s) / max(1, e - s)

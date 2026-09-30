@@ -293,15 +293,23 @@ def test_week_grid_now_line():
                  "weeks": "1-20", "location": ""}]}
 
     g = week_grid(_S(), offset=0, now=NOW.replace(hour=9, minute=30))
-    # 9:30 落在第二节（9:00 起，下节 10:00 起）→ 1 + 30/60 = 1.5
-    assert abs(g["nowLine"] - 1.5) < 0.01, g["nowLine"]
+    # 9:30 落在第二节（9:00-9:45）→ 1 + 30/45（用节次表真实下课时间）
+    assert abs(g["nowLine"] - (1 + 30 / 45)) < 0.01, g["nowLine"]
     assert g["currentNode"] == 1
+    # 课间空档（9:45-10:00）不画线：别把午休摊进上一节慢慢爬
+    g_gap = week_grid(_S(), offset=0, now=NOW.replace(hour=9, minute=50))
+    assert g_gap["nowLine"] == -1 and g_gap["currentNode"] == -1
     # 非本周视图不画线
     g2 = week_grid(_S(), offset=1, now=NOW.replace(hour=9, minute=30))
     assert g2["nowLine"] == -1
     # 教学前（早 6 点）不画线
     g3 = week_grid(_S(), offset=0, now=NOW.replace(hour=6, minute=0))
     assert g3["nowLine"] == -1 and g3["currentNode"] == -1
+    # 空缓存 → week=0（UI 显示"学期未同步"，别装第 1 周）
+    class _Empty:
+        def get_schedule(self):
+            return {}
+    assert week_grid(_Empty(), offset=0, now=NOW)["week"] == 0
 
 
 # ----------------------------------------------------------------

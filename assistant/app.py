@@ -19,6 +19,10 @@ from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
+# 自举包路径：开机自启/直接 pythonw app.py 时 sys.path[0] 是 assistant/
+# 而不是仓库根，没有这行 from assistant.paths 直接 ModuleNotFoundError
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from assistant.paths import ROOT
 
 sys.path.insert(0, str(ROOT))
@@ -53,7 +57,7 @@ FULL_SCAN_HOURS = 20   # 每天最多 1 次全量基线重扫（距上次 >20h �
 
 # 全局热键：Alt+Shift+C 唤起/隐藏小窗（RegisterHotKey + 原生消息过滤）
 WM_HOTKEY = 0x0312
-MOD_ALT, MOD_SHIFT = 0x0001, 0x0004
+MOD_ALT, MOD_SHIFT, MOD_NOREPEAT = 0x0001, 0x0004, 0x4000
 
 
 class _HotkeyFilter(QAbstractNativeEventFilter):
@@ -511,7 +515,7 @@ class App:
             hwnd = int(self.widget.winId())
             ok = ctypes.windll.user32.RegisterHotKey(
                 None if hwnd == 0 else hwnd, 1,
-                MOD_ALT | MOD_SHIFT, ord("C"))
+                MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, ord("C"))
             if not ok:
                 log.warning("热键注册失败（可能被其他程序占用）：Alt+Shift+C")
                 return
@@ -525,11 +529,11 @@ class App:
             log.debug("热键不可用：%s", traceback.format_exc())
 
     def _on_hotkey(self) -> None:
-        """防抖：合成键盘/系统重发会让一次按压产生两条 WM_HOTKEY，
-        连切两次等于没切。"""
+        """防抖：系统偶发重发一次按压产生两条 WM_HOTKEY，连切两次等于没切。
+        MOD_NOREPEAT 已挡按住狂闪，这里只需盖住双发。"""
         import time
         now = time.monotonic()
-        if now - self._last_hotkey < 0.4:
+        if now - self._last_hotkey < 0.15:
             return
         self._last_hotkey = now
         self.toggle_widget()
@@ -675,7 +679,13 @@ class App:
             merged["scan_interval_min"] = max(5, min(240,
                 int(merged.get("scan_interval_min", 30))))
             dnd = str(merged.get("dnd", "")).strip()
-            if dnd and not re.fullmatch(r"\d{1,2}:\d{2}-\d{1,2}:\d{2}", dnd):
+            m2 = re.fullmatch(r"(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})", dnd)
+            # 形状 + 值域都查：25:99 这种"合法形状非法值"存进去，
+            # in_dnd 会静默走错分支，免打扰悄悄失效
+            bad = not m2 or any(
+                int(g) >= (24 if i % 2 == 0 else 60)
+                for i, g in enumerate(m2.groups()))
+            if dnd and bad:
                 return False, "免打扰时段格式不对，应像 23:00-07:30"
             merged["dnd"] = dnd
             save_settings(merged)
@@ -729,6 +739,11 @@ class App:
     def run(self) -> int:
         code = self.qapp.exec()
         self.store.save()
+        try:   # 先收引擎再退出：销毁期 QML 绑定读到 null 刷 TypeError 噪声
+            self.engine.deleteLater()
+            self.qapp.processEvents()
+        except Exception:
+            pass
         return code
 
     def quit(self) -> None:
