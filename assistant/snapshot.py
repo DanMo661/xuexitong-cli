@@ -446,11 +446,18 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
 # ---------- DDL 看板行（缓存富化，剩余时间每次现算） ----------
 
 def ddl_view(items: list[dict], now: datetime | None = None,
-             limit: int = 60) -> list[dict]:
-    """store 缓存的 DDL → UI 行：deadlineLabel + remainText + urgency。"""
+             limit: int = 60, ignores: list[str] | None = None) -> list[dict]:
+    """store 缓存的 DDL → UI 行：deadlineLabel + remainText + urgency。
+
+    ignores：手动忽略的 "course|title" 列表——"已线下交/不打算交"的
+    作业不该一直挂在看板上。"""
     now = now or datetime.now()
+    from assistant.store import Store
+    ig = set(ignores or [])
     out = []
     for r in items[:limit]:
+        if Store.hw_key(r.get("course", ""), r.get("title", "")) in ig:
+            continue
         dt_ = r.get("deadline_dt")
         if dt_ is None and r.get("deadline_iso"):
             try:
@@ -460,7 +467,9 @@ def ddl_view(items: list[dict], now: datetime | None = None,
                 dt_ = None
         cbg, cfg = course_color(r.get("course", ""))
         row = {"course": r.get("course", ""), "title": r.get("title", ""),
-               "status": r.get("status", ""), "cbg": cbg, "cfg": cfg}
+               "status": r.get("status", ""), "cbg": cbg, "cfg": cfg,
+               "url": r.get("url", "") or "",
+               "courseUrl": r.get("courseUrl", "") or ""}
         if dt_ is None:
             row.update({"deadlineLabel": "截止未知", "remainText": "—",
                         "urgency": "unknown"})

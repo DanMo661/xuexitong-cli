@@ -209,6 +209,21 @@ Window {
             }
         }
 
+        // 全局右键菜单（自绘）：Controls 的 Popup/Menu 在无边框 Tool 窗上
+        // 出过"幽灵半开弹窗"（悬在窗外、加宽后左缘探入画面），换成纯 Item。
+        // 必须声明在 panel 之前：兄弟层后声明者在上面，放后面会吃掉
+        // HwPage 作业卡自己的右键菜单（事件永远到不了卡片）
+        MouseArea {
+            anchors.fill: parent
+            enabled: card.expanded        // 迷你条不吃右键：小热区弹菜单只会误触
+            acceptedButtons: Qt.RightButton
+            onClicked: mouse => {
+                ctxMenu.x = Math.max(4, Math.min(mouse.x, card.width - ctxMenu.width - 8))
+                ctxMenu.y = Math.max(4, Math.min(mouse.y, card.height - ctxMenu.height - 8))
+                ctxMenu.visible = true
+            }
+        }
+
         // ================= 展开面板 =================
         Item {
             id: panel
@@ -319,18 +334,7 @@ Window {
             }
         }
 
-        // 右键菜单（自绘）：Controls 的 Popup/Menu 在无边框 Tool 窗上
-        // 出过"幽灵半开弹窗"（悬在窗外、加宽后左缘探入画面），换成纯 Item
-        MouseArea {
-            anchors.fill: parent
-            enabled: card.expanded        // 迷你条不吃右键：小热区弹菜单只会误触
-            acceptedButtons: Qt.RightButton
-            onClicked: mouse => {
-                ctxMenu.x = Math.max(4, Math.min(mouse.x, card.width - ctxMenu.width - 8))
-                ctxMenu.y = Math.max(4, Math.min(mouse.y, card.height - ctxMenu.height - 8))
-                ctxMenu.visible = true
-            }
-        }
+        // 右键菜单浮层本体（z:100 盖一切）
         Rectangle {
             id: ctxMenu
             visible: false

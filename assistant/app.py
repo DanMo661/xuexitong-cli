@@ -85,7 +85,7 @@ class ScanWorker(QObject):
     snapshot_ready = Signal(dict, bool)      # snap, ddl_force
     scan_done = Signal(int, str)          # 事件数, 时间文本
     scan_state = Signal(bool)             # worker → UI：扫描中（小窗同步图标转）
-    toast_request = Signal(str, str)      # 标题, 正文（Toast 回 UI 线程发）
+    toast_request = Signal(str, str, str)  # 标题, 正文, 点击跳转tab（空=不可点）
 
     def __init__(self, client, store, notifier, settings):
         super().__init__()
@@ -113,7 +113,24 @@ class ScanWorker(QObject):
                 only_courses=active_course_names(self.store) or None)
         except Exception:
             items = None   # None=获取失败：详情窗显示错误态而不是"没有作业"
+        if items:
+            self._enrich_course_links(items)
         self.hw_ready.emit(items)
+
+    def _enrich_course_links(self, items: list[dict]) -> None:
+        """给作业行补课程页 URL（作业自身无链接时的兜底直达）。
+        fetch_courses 有 5 分钟缓存，worker 线程里调安全。"""
+        try:
+            courses = {c["name"]: c for c in self.client.fetch_courses()}
+        except Exception:
+            return
+        for r in items:
+            c = courses.get(r.get("course", ""))
+            if c:
+                r["courseUrl"] = (
+                    "https://mooc1.chaoxing.com/visit/stucoursemiddle"
+                    f"?courseid={c['courseid']}&clazzid={c['clazzid']}"
+                    f"&cpi={c['cpi']}&ismooc2=1&v=2")
 
     def _on_extras_request(self, kind: str) -> None:
         """详情窗手动刷新：worker 线程拉数写缓存，完成后回 UI 重推。
@@ -179,7 +196,7 @@ class ScanWorker(QObject):
                 + (f" · {e['detail']}" if e.get("detail")
                    and e.get("kind") == "hwscore" else "")
                 for e in highs[:4])
-            self.toast_request.emit(title, body)
+            self.toast_request.emit(title, body, "动态")
             if self.settings.get("email_enabled"):
                 self.notifier.send_email(highs)
 
@@ -195,6 +212,7 @@ class ScanWorker(QObject):
                 only_courses=active_course_names(self.store) or None)
             # None=拉取失败保旧缓存；[] 是真空（本学期全交完），照实清
             if dl_items is not None:
+                self._enrich_course_links(dl_items)
                 self.store.set_deadlines(dl_items)
             dl = {"items": dl_items or []}
             # 提醒聚合一条发，别连弹 N 个横幅（Windows 同源通知有限流）
@@ -206,13 +224,13 @@ class ScanWorker(QObject):
                 else:
                     remind_msgs.append(r.get("text", ""))
             if remind_msgs:
-                self.toast_request.emit("截止提醒",
-                                        "\n".join(remind_msgs[:4]))
+                self.toast_request.emit("截止提醒", "\n".join(remind_msgs[:4]),
+                                        "作业")
             if not still_silent:
                 pending = self.store.pop_pending()
                 if pending:
                     body = "\n".join(p.get("text", "") for p in pending[:4])
-                    self.toast_request.emit("刚刚下课，补个提醒", body)
+                    self.toast_request.emit("刚刚下课，补个提醒", body, "作业")
         except Exception:
             log.debug("提醒引擎跳过：%s", traceback.format_exc())
 
@@ -231,6 +249,11 @@ class ScanWorker(QObject):
                                sched.get("curriculum", {}), wk, today)
         except Exception:
             return []
+
+
+class _ToastRelay(QObject):
+    """Toast 点击回调（windows-toasts 监听线程）→ Qt 信号 → UI 线程。"""
+    triggered = Signal(str)
 
 
 class App:
@@ -266,6 +289,15 @@ class App:
         self.widget = self.engine.rootObjects()[0]
         self.detail_win = self.engine.rootObjects()[1]
         self.bridge.actionTriggered.connect(self.on_widget_action)
+        # Toast 点击跳转：回调在外部线程，信号转发回 UI 线程
+        self._toast_relay = _ToastRelay()
+        self._toast_relay.triggered.connect(lambda tab: self.show_detail(tab))
+        self.bridge.hwOpenRequested.connect(self._on_open_hw)
+        self.bridge.hwIgnoreRequested.connect(self._on_ignore_hw)
+        self.detail_bridge.hwOpenRequested.connect(self._on_open_hw)
+        self.detail_bridge.hwIgnoreRequested.connect(self._on_ignore_hw)
+        self.detail_bridge.unignoreRequested.connect(self._on_unignore_all)
+        self.detail_bridge.icsRequested.connect(self._on_export_ics)
         self.worker_thread = QThread()
         self.worker = ScanWorker(self.client, self.store, self.notifier,
                                  self.settings)
@@ -452,8 +484,95 @@ class App:
     def toggle_widget(self) -> None:
         self.widget.setVisible(not self.widget.isVisible())
 
-    def _on_toast(self, title: str, body: str) -> None:
-        self.notifier.toast_text(title, body)
+    def _on_toast(self, title: str, body: str, tab: str = "") -> None:
+        cb = None
+        if tab:
+            def cb(t=tab, relay=self._toast_relay):
+                relay.triggered.emit(t)
+        self.notifier.toast_text(title, body, on_click=cb)
+
+    # ---------- R2：作业直达 / 忽略 / ics 导出 ----------
+
+    def _on_open_hw(self, url: str, course: str, title: str) -> None:
+        """在学习通打开作业页（无链接兜底课程页）+ 复制作业名。"""
+        from PySide6.QtGui import QDesktopServices
+        if title:
+            self.qapp.clipboard().setText(title)
+        target = url or ""
+        if not target:
+            # 缓存行里带的课程页兜底（worker 预算好，UI 线程不碰网）
+            for r in self.store.get_deadlines():
+                if r.get("course") == course and r.get("title") == title:
+                    target = r.get("courseUrl", "") or ""
+                    break
+        if target:
+            QDesktopServices.openUrl(QUrl(target))
+            self.notifier.toast_text(
+                "正在打开学习通",
+                f"作业名已复制：{title[:30]}\n首次需在浏览器登录一次学习通")
+        else:
+            self.notifier.toast_text("暂时打不开这份作业",
+                                     "点 ⟳ 刷新作业列表后再试")
+
+    def _on_ignore_hw(self, course: str, title: str) -> None:
+        self.store.ignore_hw(course, title)
+        self.store.save()
+        self._refresh_ddl()
+        self.notifier.toast_text("已从看板隐藏", "详情窗作业页底部可全部恢复")
+
+    def _on_unignore_all(self) -> None:
+        n = self.store.unignore_hw_all()
+        self.store.save()
+        self._refresh_ddl()
+        self.detail_bridge.settingsApplied.emit(f"已恢复 {n} 条作业")
+
+    def _on_export_ics(self) -> None:
+        """课表缓存 → .ics（手机日历导入；复用协议层 build_ics）。"""
+        sched = self.store.get_schedule()
+        lessons = sched.get("lessons") or []
+        if not lessons:
+            self.detail_bridge.settingsApplied.emit("课表还没同步，稍后再导")
+            return
+        try:
+            from xuexitong_mcp.client import build_ics
+            text = build_ics(lessons, sched.get("curriculum", {}))
+        except Exception as e:
+            self.detail_bridge.settingsApplied.emit(f"导出失败：{e}")
+            return
+        from PySide6.QtWidgets import QFileDialog
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        if not os.path.isdir(desktop):
+            desktop = os.path.expanduser("~")
+        path, _ = QFileDialog.getSaveFileName(
+            self.detail_win, "导出课表", os.path.join(desktop, "课表.ics"),
+            "日历文件 (*.ics)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)   # build_ics 已是 CRLF，newline="" 防二次转换
+        except OSError as e:
+            self.detail_bridge.settingsApplied.emit(f"写入失败：{e}")
+            return
+        self.detail_bridge.settingsApplied.emit(f"已导出：{os.path.basename(path)}")
+
+    def _ddl_rows(self) -> list[dict]:
+        return ddl_view(self.store.get_deadlines(),
+                        ignores=self.store.hw_ignores())
+
+    def _ignored_count(self) -> int:
+        from assistant.store import Store
+        keys = {Store.hw_key(r.get("course", ""), r.get("title", ""))
+                for r in self.store.get_deadlines()}
+        return sum(1 for k in self.store.hw_ignores() if k in keys)
+
+    def _refresh_ddl(self) -> None:
+        rows = self._ddl_rows()
+        self.bridge.set_ddl(rows, force=True)
+        self.detail_bridge.set_hw(rows)
+        n = self._ignored_count()
+        self.bridge.set_ignored(n)
+        self.detail_bridge.set_hw_ignored(n)
 
     def _on_hw_ready(self, items) -> None:
         """worker 的作业结果（已按本学期课过滤）→ 详情窗看板。"""
@@ -461,7 +580,9 @@ class App:
             self.detail_bridge.set_hw(None)
             return
         rows = [dict(r) for r in items]
-        self.detail_bridge.set_hw(ddl_view(rows))
+        self.detail_bridge.set_hw(ddl_view(rows,
+                                           ignores=self.store.hw_ignores()))
+        self.detail_bridge.set_hw_ignored(self._ignored_count())
 
     def _save_detail_settings(self, merged: dict):
         """详情窗保存：校验→落盘→生效，返回 (ok, 提示)。"""
@@ -494,6 +615,8 @@ class App:
             self.show_detail(tab="作业")
         elif name == "open_detail_exam":
             self.show_detail(tab="考试")
+        elif name == "hw_unignore_all":
+            self._on_unignore_all()
         elif name == "mark_read":
             self.store.mark_read()
             self.store.save()
@@ -513,8 +636,8 @@ class App:
         self.bridge.set_snapshot(snap)
         self.bridge.set_events(self.store.timeline(limit=20))
         self.detail_bridge.set_timeline(self.store.timeline(limit=60))
-        self.bridge.set_ddl(ddl_view(self.store.get_deadlines()),
-                            force=ddl_force)
+        self.bridge.set_ddl(self._ddl_rows(), force=ddl_force)
+        self.bridge.set_ignored(self._ignored_count())
         self._push_grid()
         self._push_extras()
 

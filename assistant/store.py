@@ -340,6 +340,8 @@ class Store:
             rows.append({"course": r.get("course", ""),
                          "title": r.get("title", ""),
                          "status": r.get("status", ""),
+                         "url": r.get("url", "") or "",
+                         "courseUrl": r.get("courseUrl", "") or "",
                          "deadline": r.get("deadline"),
                          "deadline_iso": dt_.isoformat() if dt_ else None})
         with self._lock:
@@ -350,6 +352,31 @@ class Store:
         with self._lock:
             cache = self._data.get("deadlines_cache") or {}
         return list(cache.get("items", []))
+
+    # ---------- 作业忽略（"已线下交/不打算交"的手动排除） ----------
+
+    @staticmethod
+    def hw_key(course: str, title: str) -> str:
+        return f"{course}|{title}"
+
+    def ignore_hw(self, course: str, title: str) -> None:
+        with self._lock:
+            ig = self._data.setdefault("hw_ignores", [])
+            k = self.hw_key(course, title)
+            if k not in ig:
+                ig.append(k)
+            del ig[:-200]
+
+    def unignore_hw_all(self) -> int:
+        """清空忽略名单，返回清掉几条。"""
+        with self._lock:
+            n = len(self._data.get("hw_ignores", []))
+            self._data["hw_ignores"] = []
+            return n
+
+    def hw_ignores(self) -> list[str]:
+        with self._lock:
+            return list(self._data.get("hw_ignores", []))
 
     # ---------- 时间线与补弹队列 ----------
 

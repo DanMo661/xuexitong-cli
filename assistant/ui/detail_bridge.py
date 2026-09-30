@@ -15,6 +15,11 @@ class DetailBridge(QObject):
     tabRequested = Signal(int)        # python → QML：打开时落到指定页
     settingsApplied = Signal(str)     # python → QML：保存结果提示文案
     refreshingChanged = Signal()      # 手动刷新进行中（⟳ 旋转反馈）
+    hwOpenRequested = Signal(str, str, str)   # url, course, title → app
+    hwIgnoreRequested = Signal(str, str)      # course, title → app
+    unignoreRequested = Signal()              # 清空忽略名单 → app
+    icsRequested = Signal()                   # 导出课表 .ics → app
+    ignoredChanged = Signal()
 
     def __init__(self, parent=None, settings=None, save_cb=None,
                  refresh_hw_cb=None, refresh_extra_cb=None,
@@ -33,6 +38,7 @@ class DetailBridge(QObject):
         self._progress = {"rows": [], "otherRows": [], "totalLeft": 0,
                           "coursesLeft": 0, "hasData": False, "date": ""}
         self._refreshing = False
+        self._ignored_hw = 0
 
     # ---------- 数据注入（app 线程） ----------
 
@@ -84,6 +90,11 @@ class DetailBridge(QObject):
             self._refreshing = on
             self.refreshingChanged.emit()
 
+    def set_hw_ignored(self, n: int) -> None:
+        if n != self._ignored_hw:
+            self._ignored_hw = n
+            self.ignoredChanged.emit()
+
     # ---------- QML 属性 ----------
 
     @Property("QVariantList", notify=timelineChanged)
@@ -106,6 +117,9 @@ class DetailBridge(QObject):
 
     @Property(bool, notify=refreshingChanged)
     def refreshing(self): return self._refreshing
+
+    @Property(int, notify=ignoredChanged)
+    def hwIgnored(self): return self._ignored_hw
 
     @Property("QVariantMap", constant=True)
     def settings(self): return self._settings
@@ -136,6 +150,22 @@ class DetailBridge(QObject):
     @Slot(str)
     def markNoticeRead(self, key: str) -> None:
         self._notice_read_cb(str(key))
+
+    @Slot(str, str, str)
+    def openHw(self, url: str, course: str, title: str) -> None:
+        self.hwOpenRequested.emit(url, course, title)
+
+    @Slot(str, str)
+    def ignoreHw(self, course: str, title: str) -> None:
+        self.hwIgnoreRequested.emit(course, title)
+
+    @Slot()
+    def unignoreAll(self) -> None:
+        self.unignoreRequested.emit()
+
+    @Slot()
+    def exportIcs(self) -> None:
+        self.icsRequested.emit()
 
     @Slot(int)
     def gotoTab(self, tab: int) -> None:

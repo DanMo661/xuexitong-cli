@@ -11,8 +11,9 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from assistant.classify import classify_exam, classify_hw_status  # noqa: E402
-from assistant.snapshot import (exam_summary, exams_view, notices_view,  # noqa: E402
-                                parse_exam_rows, progress_view)
+from assistant.snapshot import (ddl_view, exam_summary, exams_view,  # noqa: E402
+                                notices_view, parse_exam_rows,
+                                progress_view)
 from assistant.store import Store  # noqa: E402
 
 NOW = datetime(2026, 9, 30, 12, 0)
@@ -219,6 +220,43 @@ def test_notices_view():
     out = notices_view([{"title": "t", "sender": "s", "time": "x",
                          "unread": True, "content": "c"}])
     assert out[0]["unread"] is True and out[0]["title"] == "t"
+
+
+def test_hw_ignore_roundtrip():
+    s = _store()
+    s.set_deadlines([
+        {"course": "数字图像处理", "title": "实验四", "status": "未交",
+         "url": "https://x/chaoxing/work/1", "deadline": None,
+         "deadline_dt": NOW + timedelta(days=2)},
+        {"course": "机器学习", "title": "HW1", "status": "未交",
+         "url": "", "deadline": None, "deadline_dt": None},
+    ])
+    rows = ddl_view(s.get_deadlines(), ignores=[])
+    assert rows[0]["url"] == "https://x/chaoxing/work/1"
+    assert rows[1]["url"] == "" and rows[1]["urgency"] == "unknown"
+    s.ignore_hw("数字图像处理", "实验四")
+    rows = ddl_view(s.get_deadlines(), ignores=s.hw_ignores())
+    assert [r["title"] for r in rows] == ["HW1"]   # 被忽略的从看板消失
+    assert s.unignore_hw_all() == 1
+    assert len(ddl_view(s.get_deadlines(), ignores=s.hw_ignores())) == 2
+    # 重复忽略幂等
+    s.ignore_hw("a", "b")
+    s.ignore_hw("a", "b")
+    assert s.hw_ignores().count("a|b") == 1
+
+
+def test_deadline_cache_carries_urls():
+    s = _store()
+    s.set_deadlines([
+        {"course": "C", "title": "T", "status": "未交",
+         "url": "https://work", "courseUrl": "https://course",
+         "deadline": "10-01 10:00", "deadline_dt": NOW + timedelta(days=1)},
+    ])
+    r = s.get_deadlines()[0]
+    assert r["url"] == "https://work" and r["courseUrl"] == "https://course"
+    view = ddl_view(s.get_deadlines())[0]
+    assert view["url"] == "https://work"
+    assert view["courseUrl"] == "https://course"
 
 
 # ----------------------------------------------------------------

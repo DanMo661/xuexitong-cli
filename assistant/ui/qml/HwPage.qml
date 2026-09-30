@@ -1,10 +1,13 @@
 import QtQuick
 import "." as Ui
 
-// 作业页：DDL 看板（紧迫度色条 + 剩余时间），点击进详情窗
+// 作业页：DDL 看板（紧迫度色条 + 剩余时间），点击进详情窗；
+// 右键单卡：在学习通打开 / 不再提醒
 Item {
     id: page
     signal openDetail()
+    // 右键菜单当前指向的卡（菜单项要用它的 url/course/title）
+    property var menuCard: null
 
     // 待办数（过期/截止未知不算，它们已沉底淡化）
     readonly property int pendingCount: {
@@ -16,7 +19,10 @@ Item {
         return n
     }
 
-    onVisibleChanged: if (visible) enter.restart()
+    onVisibleChanged: {
+        if (visible) enter.restart()
+        else hwMenu.visible = false
+    }
 
     ParallelAnimation {
         id: enter
@@ -155,6 +161,38 @@ Item {
                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                         onClicked: page.openDetail()
                     }
+                    // 右键单卡菜单（自绘：Controls 弹窗在无边框 Tool 窗上有幽灵半开前科）
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.RightButton
+                        onClicked: mouse => {
+                            page.menuCard = modelData
+                            // delegate 在 Flickable 里，坐标换到 page 系
+                            const p = mapToItem(page, mouse.x, mouse.y)
+                            hwMenu.x = Math.max(4, Math.min(
+                                p.x, page.width - hwMenu.width - 8))
+                            hwMenu.y = Math.max(4, Math.min(
+                                p.y, page.height - hwMenu.height - 8))
+                            hwMenu.visible = true
+                        }
+                    }
+                }
+            }
+
+            // 已忽略条目的恢复入口（不忽略就别占地方）
+            Rectangle {
+                visible: Bridge.ignoredHw > 0
+                width: parent.width; height: 34; radius: Ui.Theme.radiusMd
+                color: Ui.Theme.cardAlt
+                Text {
+                    anchors.centerIn: parent
+                    text: "已隐藏 " + Bridge.ignoredHw + " 条不打算交的作业 · 点击恢复"
+                    color: Ui.Theme.muted; font.pixelSize: 10
+                    font.family: Ui.Theme.fontFamily
+                }
+                MouseArea {
+                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                    onClicked: Bridge.action("hw_unignore_all")
                 }
             }
 
@@ -179,6 +217,70 @@ Item {
                     }
                 }
             }
+        }
+    }
+
+    // 单卡右键菜单（z 高于遮罩）
+    Rectangle {
+        id: hwMenu
+        visible: false
+        z: 100
+        width: 168; height: hwMenuCol.childrenRect.height + 8
+        radius: Ui.Theme.radiusSm
+        color: Ui.Theme.card
+        border.width: 1; border.color: Ui.Theme.border
+        Column {
+            id: hwMenuCol
+            anchors.top: parent.top; anchors.topMargin: 4
+            anchors.left: parent.left; anchors.leftMargin: 4
+            spacing: 0
+            HwMenuItem {
+                label: "在学习通打开"
+                onPick: {
+                    hwMenu.visible = false
+                    if (page.menuCard)
+                        Bridge.openHw(page.menuCard.url || "",
+                                      page.menuCard.course,
+                                      page.menuCard.title)
+                }
+            }
+            HwMenuItem {
+                label: "不再提醒这份作业"
+                onPick: {
+                    hwMenu.visible = false
+                    if (page.menuCard)
+                        Bridge.ignoreHw(page.menuCard.course, page.menuCard.title)
+                }
+            }
+        }
+    }
+    // 点菜单外关闭
+    MouseArea {
+        enabled: hwMenu.visible
+        anchors.fill: parent
+        z: 99
+        onClicked: hwMenu.visible = false
+    }
+
+    component HwMenuItem: Rectangle {
+        property string label
+        signal pick()
+        width: 160; height: 32
+        radius: 6
+        color: hmiHover.hovered ? Ui.Theme.secondary : "transparent"
+        Behavior on color { ColorAnimation { duration: 100 } }
+        HoverHandler { id: hmiHover }
+        Text {
+            anchors.left: parent.left; anchors.leftMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            text: label
+            color: Ui.Theme.fg; font.pixelSize: 12
+            font.family: Ui.Theme.fontFamily
+        }
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: pick()
         }
     }
 }

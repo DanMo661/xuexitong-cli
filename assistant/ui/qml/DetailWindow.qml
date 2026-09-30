@@ -277,6 +277,7 @@ Window {
                 }
                 Rectangle {
                     visible: !DBridge.hwFailed && DBridge.hw.length === 0
+                             && DBridge.hwIgnored === 0
                     width: parent.width; height: 90; radius: Ui.Theme.radiusMd
                     color: "#FFFFFF"; border.width: 1; border.color: Ui.Theme.border
                     Text {
@@ -290,12 +291,57 @@ Window {
                 Repeater {
                     model: DBridge.hw
                     delegate: Rectangle {
+                        id: hwCard
                         width: hwCol.width; height: 64
                         radius: Ui.Theme.radiusMd
                         color: "#FFFFFF"
                         border.width: 1; border.color: Ui.Theme.border
                         opacity: (modelData.urgency === "expired"
                                   || modelData.urgency === "unknown") ? 0.62 : 1
+                        HoverHandler { id: hwCardHover }
+                        // 悬停操作钮：去交（开学习通）/ ✕（从看板隐藏）——
+                        // 摸得着的动作比藏右键里直白
+                        Row {
+                            anchors.top: parent.top; anchors.topMargin: 4
+                            anchors.right: parent.right; anchors.rightMargin: 6
+                            spacing: 4
+                            Rectangle {
+                                visible: hwCardHover.hovered
+                                width: goTxt.width + 12; height: 18; radius: 9
+                                color: Ui.Theme.primarySoft
+                                Text {
+                                    id: goTxt
+                                    anchors.centerIn: parent; text: "去交 ↗"
+                                    color: Ui.Theme.primary
+                                    font.pixelSize: 9; font.weight: Font.Medium
+                                    font.family: Ui.Theme.fontFamily
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: DBridge.openHw(
+                                        modelData.url || "",
+                                        modelData.course, modelData.title)
+                                }
+                            }
+                            Rectangle {
+                                visible: hwCardHover.hovered
+                                width: 18; height: 18; radius: 9
+                                color: Ui.Theme.secondary
+                                Text {
+                                    anchors.centerIn: parent; text: "✕"
+                                    color: Ui.Theme.muted
+                                    font.pixelSize: 9
+                                    font.family: Ui.Theme.fontFamily
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: DBridge.ignoreHw(
+                                        modelData.course, modelData.title)
+                                }
+                            }
+                        }
                         Rectangle {
                             x: 10; anchors.verticalCenter: parent.verticalCenter
                             width: 36; height: 36; radius: 10
@@ -351,6 +397,23 @@ Window {
                                 font.family: Ui.Theme.fontFamily
                             }
                         }
+                    }
+                }
+                // 忽略恢复条（有隐藏才出现；沉底，别挡新作业）
+                Rectangle {
+                    visible: DBridge.hwIgnored > 0
+                    width: parent.width; height: 34; radius: Ui.Theme.radiusMd
+                    color: Ui.Theme.cardAlt
+                    Text {
+                        anchors.centerIn: parent
+                        text: "已隐藏 " + DBridge.hwIgnored
+                              + " 条作业（不打算交的）· 点击全部恢复"
+                        color: Ui.Theme.muted; font.pixelSize: 10
+                        font.family: Ui.Theme.fontFamily
+                    }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: DBridge.unignoreAll()
                     }
                 }
             }
@@ -493,6 +556,26 @@ Window {
                             Switch {
                                 checked: setFlick.autostart
                                 onToggled: setFlick.autostart = checked
+                            }
+                        }
+                        SetRow {
+                            label: "课表到手机"
+                            Rectangle {
+                                width: icsTxt.width + 20; height: 30; radius: 8
+                                color: Ui.Theme.secondary
+                                border.width: 1; border.color: Ui.Theme.border
+                                Text {
+                                    id: icsTxt
+                                    anchors.centerIn: parent
+                                    text: "导出日历 (.ics)"
+                                    color: Ui.Theme.fg; font.pixelSize: 11
+                                    font.family: Ui.Theme.fontFamily
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: DBridge.exportIcs()
+                                }
                             }
                         }
                     }

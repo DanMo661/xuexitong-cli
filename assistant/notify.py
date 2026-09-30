@@ -68,7 +68,8 @@ def ensure_aumid_registered() -> None:
 class Notifier:
     def __init__(self, settings: dict):
         self.settings = settings or {}
-        self._toasts = None
+        self._toasts = None          # WindowsToaster（不可点击，轻）
+        self._itoasts = None         # InteractableWindowsToaster（带回调，重）
 
     # ---------- 路由 ----------
 
@@ -82,19 +83,48 @@ class Notifier:
 
     # ---------- Windows Toast（双后端） ----------
 
-    def _toast_windows_toasts(self, title: str, body: str) -> bool:
+    def _plain_toast(self, title: str, body: str) -> bool:
+        """无按钮横幅。windows-toasts 1.3 的 API：Toast.text_fields 列表
+        （0.x 的 ToastText2 类已移除，别再 import）。"""
         try:
-            from windows_toasts import Toast, ToastText2
-            from windows_toasts import WindowsToaster
+            from windows_toasts import Toast, WindowsToaster
             if self._toasts is None:
                 self._toasts = WindowsToaster(APP_ID)
-            t = ToastText2()
-            t.SetFirstLine(title)
-            t.SetSecondLine(body.replace("\n", "  "))
+            t = Toast()
+            t.text_fields = [title, body.replace("\n", "  ")]
             self._toasts.show_toast(t)
             return True
         except Exception as e:
             log.debug("windows-toasts 失败：%s", e)
+            return False
+
+    def _clickable_toast(self, title: str, body: str,
+                         on_click, click_arg: str) -> bool:
+        """带「查看」按钮的横幅；点正文或按钮都触发 on_click(click_arg)。
+
+        回调在 windows-toasts 的监听线程里跑，on_click 必须线程安全
+        （调用方用 Qt 信号转发回 UI 线程）。"""
+        try:
+            from windows_toasts import (InteractableWindowsToaster, Toast,
+                                        ToastButton)
+            if self._itoasts is None:
+                # 1.3.x：直接构造即用（2.x 才有 context manager，别乱加）
+                self._itoasts = InteractableWindowsToaster(APP_ID)
+            t = Toast()
+            t.text_fields = [title, body.replace("\n", "  ")]
+
+            def _activated(args, cb=on_click, arg=click_arg):
+                try:
+                    cb(arg)
+                except Exception:
+                    log.debug("Toast 点击回调失败", exc_info=True)
+
+            t.on_activated = _activated
+            t.AddAction(ToastButton(content="查看", arguments="view"))
+            self._itoasts.show_toast(t)
+            return True
+        except Exception as e:
+            log.debug("可点击 Toast 失败（退普通横幅）：%s", e)
             return False
 
     def _toast_winotify(self, title: str, body: str) -> bool:
@@ -121,12 +151,19 @@ class Notifier:
         if not self._toast_windows_toasts(title, body):
             self._toast_winotify(title, body)
 
-    def toast_text(self, title: str, body: str) -> None:
+    def toast_text(self, title: str, body: str,
+                   on_click=None, click_arg: str = "") -> None:
         if not self.settings.get("toast_enabled", True):
             return
         ensure_aumid_registered()
-        if not self._toast_windows_toasts(title, body):
+        if on_click is not None and self._clickable_toast(
+                title, body, on_click, click_arg):
+            return
+        if not self._plain_toast(title, body):
             self._toast_winotify(title, body)
+
+    # 兼容旧调用名（watch CLI 等处）
+    _toast_windows_toasts = _plain_toast
 
     # ---------- 邮件（可选） ----------
 

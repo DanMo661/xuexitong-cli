@@ -41,6 +41,9 @@ class Bridge(QObject):
     actionTriggered = Signal(str)     # QML → app：scan_now/open_detail/hide/…
     weekRequested = Signal(int)       # QML → app：重算第 (当前+offset) 周网格
     tabJumped = Signal(int)           # python → QML：切页（截图模式/外部跳转用）
+    hwOpenRequested = Signal(str, str, str)   # url, course, title → app 开浏览器
+    hwIgnoreRequested = Signal(str, str)      # course, title → app 忽略
+    ignoredChanged = Signal()
 
     def __init__(self, parent=None, get_position=None, save_pos=None):
         super().__init__(parent)
@@ -72,6 +75,7 @@ class Bridge(QObject):
         self._exam_ongoing = False     # 最近一场考试正在进行（横幅红色紧急态）
         self._progress_left = 0        # 任务点未完成总数（0=不显示）
         self._progress_courses = 0
+        self._ignored_hw = 0           # 手动忽略的作业数（页脚恢复入口用）
 
     # ---------- 数据注入（app 线程调用） ----------
 
@@ -162,6 +166,11 @@ class Bridge(QObject):
         self._scanning = on
         self.scanningChanged.emit()
 
+    def set_ignored(self, n: int) -> None:
+        if n != self._ignored_hw:
+            self._ignored_hw = n
+            self.ignoredChanged.emit()
+
     def set_extras(self, exam_summary: str, exam_count: int,
                    exam_ongoing: bool, progress_left: int,
                    progress_courses: int) -> None:
@@ -248,6 +257,9 @@ class Bridge(QObject):
     @Property(int, notify=extrasChanged)
     def progressCourses(self): return self._progress_courses
 
+    @Property(int, notify=ignoredChanged)
+    def ignoredHw(self): return self._ignored_hw
+
     # ---------- QML → Python 动作 ----------
 
     @Slot(str)
@@ -261,6 +273,15 @@ class Bridge(QObject):
     @Slot(int)
     def set_tab(self, tab: int) -> None:
         self.tabJumped.emit(int(tab))
+
+    @Slot(str, str, str)
+    def openHw(self, url: str, course: str, title: str) -> None:
+        """在学习通打开这份作业（app 侧开浏览器 + 复制作业名）。"""
+        self.hwOpenRequested.emit(url, course, title)
+
+    @Slot(str, str)
+    def ignoreHw(self, course: str, title: str) -> None:
+        self.hwIgnoreRequested.emit(course, title)
 
     @Slot(result="QVariant")
     def initial_position(self):
