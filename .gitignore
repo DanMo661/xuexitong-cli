@@ -16,3 +16,19 @@ build/
 _explore/
 widget_pos.json
 widget_config.json
+
+# 桌面助手运行期状态（settings 含 SMTP 授权码，绝不入库）
+settings.json
+store.json
+widget_geometry.json
+
+# 会话调试产物（截图/日志/临时脚本，待清理后移除这些规则）
+/*.png
+/*.log
+/*.txt
+/_np_*
+/_chk_*
+/_z_*
+/_debug_*
+/analyze_ghost.py
+/_snap_ccswitch.ps1

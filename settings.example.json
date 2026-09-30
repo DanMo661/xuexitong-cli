@@ -1,0 +1,13 @@
+{
+  "theme": "auto",
+  "scan_interval_min": 30,
+  "dnd": "23:00-07:30",
+  "toast_enabled": true,
+  "email_enabled": false,
+  "email_to": "",
+  "smtp_host": "",
+  "smtp_port": 465,
+  "smtp_ssl": true,
+  "smtp_user": "",
+  "smtp_pass": ""
+}

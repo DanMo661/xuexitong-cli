@@ -52,6 +52,7 @@ def lesson_rows(lessons: list[dict], curriculum: dict, week: int,
             "name": les.get("name") or "?",
             "location": les.get("location") or "待定",
             "teacher": les.get("teacherName") or "",
+            "weeks": les.get("weeks") or "",
             "begin": begin, "length": length,
             "start": dt.datetime.combine(day, times[begin - 1][0]),
             "end": dt.datetime.combine(

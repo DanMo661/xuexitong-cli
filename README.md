@@ -100,15 +100,51 @@ copy config.example.json config.json   # Linux: cp
 
 外层按客户端惯例包一层：ZCode 写在 `~/.zcode/cli/config.json` 的 `mcp.servers` 下，Claude Desktop 写在 `claude_desktop_config.json` 的 `mcpServers` 下。Windows 下 `command` 建议写 python 绝对路径（如 `D:/Python/python.exe`）。
 
-## 学习通小助手（桌面悬浮窗，可选，零新增依赖）
+## 学习通小助手（桌面常驻助手 v2.0）
 
-不想开对话时，可以在桌面上挂一个常驻小助手（tkinter 标准库实现）。外观对齐市面高星桌面组件：浅色为默认主题（近白圆角卡片 + 1px 细描边，参照 Fluent 2 亮色规范与 Class Widgets / TrafficMonitor 的桌面组件思路），右键可切换深色：
+不想开对话、也不想再点开学习通 App？`assistant/` 是完整的桌面常驻助手：**巡检引擎 + Windows 通知 + PySide6 悬浮窗 + 托盘**，学习通有新作业/资料/通知时主动送达，你只需要看一眼桌面。
+
+```bash
+# 首次：建虚拟环境装依赖（PySide6 + windows-toasts）
+python -m venv .venv
+.venv\Scripts\pip install PySide6 windows-toasts pycryptodome requests
+# 日常：双击 学习通小助手.bat，或
+.venv\Scripts\pythonw -m assistant.app
+```
+
+### 它替你盯着什么
+
+- **每日自动巡检**（默认 30 分钟一轮，可调）：扫活跃课程的作业列表、资料区（递归两层）、通知中心；对学习通只读查询、课间 0.8s 节流，做一个温和的人类
+- **新增内容分级**：文件名/标题含 作业·HW·实验·报告·考试 → 高优（Toast 弹窗）；老师发的一般通知 → 中优；普通课件更新 → 低优只进时间线
+- **DDL 渐进提醒**：截止前 3 天首次提及 → 1 天前提醒 → 4 小时前升级 → 1 小时前紧急，同一作业每个阶段只提醒一次；已完成/待批阅的作业永不打扰
+- **人性化规则**：默认免打扰 23:00–07:30；正在上课时自动静默（下课补弹）；红色只留给紧急事项
+- **通知通道**：Windows 原生 Toast（进通知中心，windows-toasts 优先、winotify 回退）+ 应用内时间线 + 可选邮件备份通道（SMTP 授权码，默认关）
+
+### 悬浮窗（Fluent 2 设计语言）
+
+- **迷你态**（340×60）：呼吸进度环（当前节课进度）+ 课名 + 「剩 X 分钟」倒计时
+- **点击展开**（同窗动画 340×436）：今日课程时间轴——当前节品牌蓝卡白字+白色进度条，并行课弱蓝边条，已结束课灰化打勾；最新动态（红色仅限紧急）；同步时间角标
+- **详情窗**（托盘/右键进入）：动态时间线 / 作业截止看板（剩 X 小时/天 变色）/ 设置（主题、巡检间隔、免打扰、开机自启、邮件）
+- **托盘常驻**：双击显隐小窗；右键菜单承载全部入口；单实例锁防双开；位置自动记忆
+- **开机自启**：设置页一键开关（HKCU Run 注册表，可在任务管理器启动页管理）
+
+### 无 GUI 模式（服务器/调试）
+
+```bash
+.venv\Scripts\python -m assistant.watch --once          # 单轮巡检
+.venv\Scripts\python -m assistant.watch --interval 30   # 常驻轮询
+.venv\Scripts\python -m assistant.app --screenshot out.png   # UI 自截图
+```
+
+- 旧版 tkinter 悬浮窗仍保留（`python -m xuexitong_mcp.widget`），新功能一律进 `assistant/`
+- 运行期状态文件 `settings.json`（含 SMTP 授权码）、`store.json`（巡检基线）、`widget_geometry.json` 均已 gitignore，绝不入库；模板见 `settings.example.json`
+- 可选 PyInstaller 打包（`pyinstaller --onedir --windowed assistant/app.py`，排除 QtWebEngine 后约 128MB）：数据目录取 exe 所在目录（或设 `XXT_HOME` 环境变量重定向），把 `config.json` 放 exe 旁即可独立运行；打包形态下首次登录态适配仍在迭代，自用推荐 venv + bat 方式
+
+## 旧版 tkinter 悬浮窗（v1，兼容保留）
 
 ```bash
 python -m xuexitong_mcp.widget       # 或 pip install . 后运行 xuexitong-assistant
 ```
-
-Windows 下双击仓库根目录的 `学习通小助手.bat` 即可（用 pythonw 启动，无控制台窗口）。
 
 - **收起态**：状态点 + 日期/周次/星期 + 下一节课（倒计时）/ 正在上课（带进度条）+ 待交作业数 + 明天首课，卡片约 336px 宽
 - **点击右下角"详情 ▼"展开**（或双击卡片）：今日课程逐节（当前课程带强调条与进度）、待交作业倒计时（2 天内变琥珀、已过期变红）、最新 3 条通知（未读蓝色 + 头部未读徽标）

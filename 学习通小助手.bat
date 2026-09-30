@@ -1,14 +1,11 @@
 @echo off
-rem Launch the Chaoxing schedule floating widget (no console window)
+chcp 65001 >nul
 cd /d "%~dp0"
-where pythonw.exe >nul 2>nul
-if %errorlevel%==0 (
-    start "" pythonw.exe -m xuexitong_mcp.widget
-    exit /b
+if exist ".venv\Scripts\pythonw.exe" (
+    start "" ".venv\Scripts\pythonw.exe" -m assistant.app
+    exit /b 0
 )
-if exist "D:\Python\pythonw.exe" (
-    start "" "D:\Python\pythonw.exe" -m xuexitong_mcp.widget
-    exit /b
-)
-echo pythonw not found. Please install Python or edit this script.
+echo [Xuexitong] .venv not found. Setup:
+echo   python -m venv .venv
+echo   .venv\Scripts\pip install -r requirements.txt
 pause
