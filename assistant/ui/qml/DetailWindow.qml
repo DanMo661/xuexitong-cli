@@ -547,14 +547,14 @@ Window {
                         }
                         SetRow {
                             label: "桌面弹窗"
-                            Switch {
+                            SetSwitch {
                                 checked: setFlick.toastOn
                                 onToggled: setFlick.toastOn = checked
                             }
                         }
                         SetRow {
                             label: "开机自启"
-                            Switch {
+                            SetSwitch {
                                 checked: setFlick.autostart
                                 onToggled: setFlick.autostart = checked
                             }
@@ -607,7 +607,7 @@ Window {
                         }
                         SetRow {
                             label: "重要事项发邮件"
-                            Switch {
+                            SetSwitch {
                                 checked: setFlick.emailOn
                                 onToggled: setFlick.emailOn = checked
                             }
@@ -709,6 +709,26 @@ Window {
         background: Rectangle {
             radius: 8; color: Ui.Theme.secondary
             border.width: 1; border.color: Ui.Theme.border
+        }
+    }
+
+    // Basic 风格 Switch 的选中轨道默认近黑，跟主色蓝脱节——
+    // 激活态统一走主题色
+    component SetSwitch: Switch {
+        id: sw
+        indicator: Rectangle {
+            implicitWidth: 38; implicitHeight: 22; radius: 11
+            color: sw.checked ? Ui.Theme.primary : Ui.Theme.secondary
+            border.width: 1
+            border.color: sw.checked ? Ui.Theme.primaryBorder : Ui.Theme.border
+            Behavior on color { ColorAnimation { duration: 120 } }
+            Rectangle {
+                width: 16; height: 16; radius: 8
+                y: (parent.height - height) / 2
+                x: sw.checked ? parent.width - width - 3 : 3
+                color: "#FFFFFF"
+                Behavior on x { NumberAnimation { duration: 120 } }
+            }
         }
     }
 

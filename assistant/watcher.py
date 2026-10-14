@@ -29,6 +29,27 @@ def pretty_name(raw: str) -> str:
     return " ".join(n.split())
 
 
+def _parse_send_time(raw) -> float:
+    """通知 sendTime（"2026-09-20 10:49:46" 或毫秒时间戳，含数字字符串）→ epoch 秒，失败 0。"""
+    try:
+        if isinstance(raw, (int, float)) and raw > 1e12:
+            return raw / 1000.0
+        s = str(raw or "").strip().replace("T", " ")
+        if not s:
+            return 0.0
+        if s.isdigit() and len(s) > 12:   # 字符串形式的毫秒时间戳
+            return int(s) / 1000.0
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                import datetime as _dt
+                return _dt.datetime.strptime(s[:19], fmt).timestamp()
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return 0.0
+
+
 HOMEWORK_CLOSED_MARK = "作业签名"   # fetch_homework 对未开放课程的报错特征
 
 
@@ -50,6 +71,7 @@ class Watcher:
         self.probe_download = probe_download   # medium 资料是否下载读内容确认
         self.max_courses = max_courses_per_scan
         self.on_events = None         # callable(list[Event])，UI/CLI 注入
+        self._record_events = True    # 全量扫往年课时置 False：只建基线不入线
 
     # ---------- 主流程 ----------
 
@@ -94,6 +116,12 @@ class Watcher:
                 log.info("收到退出请求，本轮扫描提前收尾")
                 break
             try:
+                # 全量扫的目的是给往年课建基线；非本学期课的事件只会
+                # 污染动态页和未读角标（"模拟电子技术基础"实锤）。
+                # 活跃集为空=课表没拉到，不过滤兜底
+                inactive = (full and active_cids
+                            and str(c["courseid"]) not in active_cids)
+                self._record_events = not inactive
                 events += self._scan_course(c)
             except Exception as e:
                 msg = str(e)
@@ -101,6 +129,8 @@ class Watcher:
                     self.store.set_homework_open(self._cid(c), False)
                     continue
                 log.warning("课程 %s 扫描失败：%s", c.get("name"), msg)
+            finally:
+                self._record_events = True
             time.sleep(0.8)   # 课间小歇，别像机器
 
         events += self._scan_exams()
@@ -199,12 +229,24 @@ class Watcher:
             by_key[key] = n
         for key in self.store.diff_notices(list(by_key.keys())):
             n = by_key.get(key, {})
+            # 事件时间用通知自己的 sendTime（全用扫描时刻会让动态页
+            # 一整页同一个时间戳）；接口拉的是"最近100条"，会混进
+            # 上学期的旧通知——超过 14 天的不算新动态（已标记已读）
+            sent = _parse_send_time(n.get("sendTime", ""))
+            if sent and ((time.time() - sent) > 14 * 86400
+                         or (sent - time.time()) > 86400):
+                continue   # 超 14 天的旧通知/预发到 1 天后的通知都不算新动态
             sender = n.get("createrName", "") or n.get("sender", "")
             verdict = classify_notice(n.get("title", ""), sender,
                                       n.get("content", ""))
+            extra = {}
+            if sent:
+                extra["time"] = time.strftime("%Y-%m-%d %H:%M:%S",
+                                              time.localtime(sent))
             events.append(self._evt("notice", sender,
                                     n.get("title", key), verdict,
-                                    detail=(n.get("content", "") or "")[:160]))
+                                    detail=(n.get("content", "") or "")[:160],
+                                    **extra))
         return events
 
     # ---------- 考试表 / 任务点 ----------
@@ -287,7 +329,8 @@ class Watcher:
                     tag=verdict["tag"], priority=verdict["priority"],
                     reason=verdict.get("reason", ""))
         evt.update(extra)
-        self.store.append_timeline(evt)
+        if self._record_events:   # 往年课全量扫：只建基线，不污染时间线/角标
+            self.store.append_timeline(evt)
         return evt
 
     # ---------- medium 资料的二次确认（可选，由 UI 闲时调用） ----------

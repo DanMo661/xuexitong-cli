@@ -36,3 +36,7 @@ widget_geometry.json
 store.json.tmp
 /_r2_*
 /_r3_*
+
+# 用户数据备份（时间线清洗/修复时手工留档）
+store.json.*.bak
+store.json.fixbak

@@ -207,12 +207,18 @@ class Store:
                 continue
             key = f"{n.get('uuid') or n.get('sendTime', '')}|{n.get('title', '')}"
             unread_server = str(n.get("isread", "0")) == "0"
+            # sendTime 可能是毫秒时间戳（int）——str 化再切，别让一条
+            # 脏数据炸掉整轮巡检的缓存写入
+            stime = str(n.get("sendTime", "") or n.get("time", "") or "")
+            if stime.isdigit() and len(stime) > 12:
+                from datetime import datetime as _d
+                stime = _d.fromtimestamp(int(stime) / 1000).strftime(
+                    "%Y-%m-%d %H:%M")
             rows.append({
                 "key": key,
                 "title": n.get("title", ""),
                 "sender": n.get("createrName", "") or n.get("sender", ""),
-                "time": ((n.get("sendTime", "") or n.get("time", "") or "")
-                         [:16].replace("T", " ")),
+                "time": stime[:16].replace("T", " "),
                 # 未读 = 服务端未读 且 本地没点开过（在这看通知不会改服务端态）
                 "unread": unread_server and key not in self._notice_reads(),
                 "content": (n.get("content", "") or "")[:500],
@@ -386,8 +392,10 @@ class Store:
         evt.setdefault("time", _now_iso())
         with self._lock:
             tl = self._data["timeline"]
-            # 去重：同 kind+course+title 一天内不重复入线
+            # 去重：同 kind+course+title 一天内不重复入线（不含 course 时
+            # 两门课同日传同名文件，第二条会被吞）
             if any(e.get("kind") == evt.get("kind") and
+                   e.get("course") == evt.get("course") and
                    e.get("title") == evt.get("title") and
                    e.get("time", "")[:10] == evt["time"][:10] for e in tl[:50]):
                 return
@@ -410,5 +418,11 @@ class Store:
             return q
 
     def timeline(self, limit: int = 100) -> list[dict]:
+        # 按事件自身时间倒排（通知事件带 sendTime 后，插入序≠时间序）。
+        # 归一化分隔符再比：老条目是 isoformat 的 "T"、新条目是空格，
+        # 裸字符串比较同一天会因 T>空格 错序
+        def _key(e):
+            return str(e.get("time", "")).replace("T", " ")
         with self._lock:
-            return list(self._data["timeline"][:limit])
+            tl = sorted(self._data["timeline"], key=_key, reverse=True)
+            return tl[:limit]

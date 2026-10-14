@@ -153,7 +153,53 @@ def test_diff_exams():
     assert s.diff_exams(["a|10-05", "b|10-02", "c|10-03"]) == ["a|10-05"]
 
 
+def test_timeline_sorts_across_time_formats():
+    """时间线倒排要兼容 isoformat("T") 和空格分隔两种时间串。"""
+    s = _store()
+    s._data["timeline"] = [
+        {"kind": "material", "title": "上午的资料", "time": "2026-10-14 09:00:00"},
+        {"kind": "classup", "title": "下午的预备铃", "time": "2026-10-14T08:00:00"},
+        {"kind": "notice", "title": "昨晚通知", "time": "2026-10-13 22:00:00"},
+    ]
+    titles = [e["title"] for e in s.timeline()]
+    # 同一天里 09:00 必须排在 08:00 前（裸字符串比较会把 T 分隔的排前面）
+    assert titles == ["上午的资料", "下午的预备铃", "昨晚通知"], titles
+
+
+def test_timeline_dedup_includes_course():
+    """去重键含 course：两门课同日传同名文件，第二条不能被吞。"""
+    s = _store()
+    s._data["timeline"] = []
+    s.append_timeline({"kind": "material", "course": "课A",
+                       "title": "HW1.pptx", "time": "2026-10-14 10:00:00"})
+    s.append_timeline({"kind": "material", "course": "课B",
+                       "title": "HW1.pptx", "time": "2026-10-14 11:00:00"})
+    s.append_timeline({"kind": "material", "course": "课A",
+                       "title": "HW1.pptx", "time": "2026-10-14 12:00:00"})
+    # 课B 的同名文件不能被课A 吞掉；课A 自己当天重复的仍要去重
+    titles = sorted(e["course"] for e in s.timeline())
+    assert titles == ["课A", "课B"], titles
+
+
+def test_parse_send_time_variants():
+    from assistant.watcher import _parse_send_time
+    assert _parse_send_time("") == 0.0
+    assert _parse_send_time(None) == 0.0
+    assert _parse_send_time("乱串") == 0.0
+    # 数字与数字字符串两种毫秒时间戳都要认
+    assert abs(_parse_send_time(1788105600000) - 1788105600.0) < 1
+    assert abs(_parse_send_time("1788105600000") - 1788105600.0) < 1
+    t = _parse_send_time("2026-10-14 16:00:00")
+    assert t > 1.7e9 and t < 2.2e9
+
+
 def test_notices_cache_fields_and_read():
+    # int 型毫秒 sendTime 不炸缓存写入（nitpick R2 B1）
+    s = _store()
+    s.set_notices([{"uuid": "u1", "title": "T", "createrName": "师",
+                    "sendTime": 1788105600000, "isread": "0", "content": "c"}])
+    row = s.get_notices()[0]
+    assert row["time"].count("-") == 2 and ":" in row["time"]  # 已转日期串
     """真实字段 sendTime/createrName/isread('0'/'1' 字符串)（Judge A P1-1/2）。"""
     s = _store()
     s.set_notices([
@@ -275,7 +321,8 @@ def test_deadline_cache_carries_urls():
 
 
 def test_week_grid_now_line():
-    """时间红线：node 内进度 → nowLine 行坐标（本周才显示，其他周 -1）。"""
+    """时间红线：node 内按进度走；课间空档贴下节课上沿；
+    本周之外/教学日之外不画。"""
     from datetime import timedelta
     from assistant.snapshot import week_grid
 
@@ -296,9 +343,9 @@ def test_week_grid_now_line():
     # 9:30 落在第二节（9:00-9:45）→ 1 + 30/45（用节次表真实下课时间）
     assert abs(g["nowLine"] - (1 + 30 / 45)) < 0.01, g["nowLine"]
     assert g["currentNode"] == 1
-    # 课间空档（9:45-10:00）不画线：别把午休摊进上一节慢慢爬
+    # 课间空档（9:45-10:00）：红线钉在第三节上沿（网格线上），不消失
     g_gap = week_grid(_S(), offset=0, now=NOW.replace(hour=9, minute=50))
-    assert g_gap["nowLine"] == -1 and g_gap["currentNode"] == -1
+    assert g_gap["nowLine"] == 2.0 and g_gap["currentNode"] == -1
     # 非本周视图不画线
     g2 = week_grid(_S(), offset=1, now=NOW.replace(hour=9, minute=30))
     assert g2["nowLine"] == -1
@@ -310,6 +357,52 @@ def test_week_grid_now_line():
         def get_schedule(self):
             return {}
     assert week_grid(_Empty(), offset=0, now=NOW)["week"] == 0
+
+
+def test_week_grid_fixed_rail_and_colors():
+    """节次轨恒铺到晚上（没晚课也留行）+ 起止双时刻 + 课程顺序配色不撞。"""
+    from datetime import timedelta
+    from assistant.snapshot import (COURSE_COLORS, course_colors,
+                                    week_grid)
+
+    class _S:
+        def get_schedule(self):
+            import calendar
+            monday = NOW.date() - timedelta(days=NOW.weekday())
+            times = ["8:00-8:50"] + [f"{h}:00-{h}:50" for h in range(9, 22 + 1)]
+            return {"curriculum": {
+                "firstWeekDate": calendar.timegm(monday.timetuple()) * 1000,
+                "maxWeek": 20,
+                "lessonTimeConfigArray": times,
+            }, "lessons": [
+                {"name": "甲", "dayOfWeek": 3, "beginNumber": 1, "length": 2,
+                 "weeks": "1-20", "location": "北主楼101"},
+                {"name": "乙", "dayOfWeek": 4, "beginNumber": 1, "length": 2,
+                 "weeks": "1-20", "location": ""}]}
+
+    g = week_grid(_S(), offset=0, now=NOW)
+    # 白天的课只到第 2 节，但轨恒铺到第 11 节（≈21:50），单页不滚动
+    assert len(g["nodeLabels"]) == 11
+    assert g["nodeTimes"][4] == "12:00" and g["nodeTimesEnd"][4] == "12:50"
+    assert len(g["nodeTimesEnd"]) == 11 and g["nodeTimesEnd"][0] == "08:50"
+    # 顺序配色：两门课不同色；颜色池 ≥12 色
+    names = {b["name"]: (b["bg"], b["fg"]) for b in g["blocks"]}
+    assert names["甲"] != names["乙"]
+    assert len(COURSE_COLORS) >= 12
+    m = course_colors([{"name": n} for n in ["甲", "乙", "甲"]])
+    assert set(m.values()) == {names["甲"], names["乙"]}
+    # 脏数据 dayOfWeek=8/0 不炸网格、不产块（0 别静默落进周一列）
+    class _Bad:
+        def get_schedule(self):
+            return {"curriculum": _S().get_schedule()["curriculum"], "lessons": [
+                {"name": "坏课8", "dayOfWeek": 8, "beginNumber": 1,
+                 "length": 2, "weeks": "1-20", "location": ""},
+                {"name": "坏课0", "dayOfWeek": 0, "beginNumber": 1,
+                 "length": 2, "weeks": "1-20", "location": ""}]}
+    g2 = week_grid(_Bad(), offset=0, now=NOW)
+    assert g2["blocks"] == []
+    # curWeek 字段存在（QML 翻周同步依赖）
+    assert g["curWeek"] >= 1
 
 
 # ----------------------------------------------------------------

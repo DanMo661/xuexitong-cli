@@ -54,6 +54,8 @@ def build_snapshot(client, store, now: datetime | None = None,
             elif maxw and raw > maxw:
                 snap["week_label"] = "假期"
             wk = max(1, min(raw, maxw if maxw else raw))
+        # 今天页/课表页/作业页共用一套课程身份色，先暖表再产行
+        set_course_colors(course_colors(sched.get("lessons", [])))
         rows = lesson_rows(week_lessons(sched, wk), cur, wk, now.date())
         if not snap["week_label"] and fw:
             snap["week_label"] = f"第{wk}教学周"
@@ -325,16 +327,51 @@ def progress_view(rows: list[dict],
 
 # ---------- 周视图网格（纯课表缓存计算，UI 线程可直接调） ----------
 
-# 淡彩底/深字 6 组，课程名哈希取色（浅色主题专用）
+# 淡彩底/深字 12 组（浅色主题专用）。颜色不哈希取：按课程在全学期
+# 课表里的首次出现顺序轮流分配（course_colors）——哈希取色在 12 门课上
+# 必撞（毛概/数字信号处理双双落同一个橙，分不清两门课）。
 COURSE_COLORS = [
-    ("#EAF3FF", "#2B7DE0"), ("#E6F6EC", "#2E9E5B"), ("#FFF3E2", "#C97A16"),
-    ("#F1EDFF", "#7A5FD8"), ("#E4F6F6", "#1E9E9E"), ("#FFEDF4", "#D4568F"),
+    ("#EAF2FE", "#1F6FD6"),  # 蓝
+    ("#E7F5EC", "#1F7D4C"),  # 绿
+    ("#FFF3DE", "#A26E08"),  # 杏黄
+    ("#EFEAFB", "#6C4EC2"),  # 紫
+    ("#E1F4F6", "#0E7C93"),  # 青
+    ("#FDEDF2", "#BF4478"),  # 玫红
+    ("#EDF3FE", "#3F63C4"),  # 靛蓝
+    ("#F1F6DE", "#69871C"),  # 黄绿
+    ("#FDEDE4", "#BF5B1D"),  # 橙
+    ("#E9F9F1", "#0F8A62"),  # 薄荷
+    ("#FDEBEA", "#C03D49"),  # 珊红
+    ("#EEF1FB", "#5558C9"),  # 长春花
 ]
+
+# 课表外名字（"学习通知"、旧学期作业课、老师人名）统一中性灰，
+# 不掺进课程身份色——动态页/作业页才不会满屏小彩灯。
+NEUTRAL_COLOR = ("#F1F2F4", "#6B7280")
+
+_course_color_map: dict[str, tuple[str, str]] = {}
+
+
+def course_colors(lessons: list) -> dict[str, tuple[str, str]]:
+    """全学期稳定配色：按课程首次出现顺序轮流取 12 色，
+    学期 ≤12 门课时同屏绝不撞色。课表重新同步后由调用方重喂。"""
+    m: dict[str, tuple[str, str]] = {}
+    for les in lessons or []:
+        n = str(les.get("name") or "").strip()   # name 恒 str 化：脏数据别炸整网格
+        if n and n not in m:
+            m[n] = COURSE_COLORS[len(m) % len(COURSE_COLORS)]
+    return m
+
+
+def set_course_colors(m: dict) -> None:
+    global _course_color_map
+    _course_color_map = m or {}
 
 
 def course_color(name: str) -> tuple[str, str]:
-    import zlib
-    return COURSE_COLORS[zlib.crc32(name.encode("utf-8")) % len(COURSE_COLORS)]
+    """课程→(淡彩底, 深彩字)。课表内课程全局同一身份色；
+    查不到的名字给中性灰。"""
+    return _course_color_map.get((name or "").strip()) or NEUTRAL_COLOR
 
 
 def expand_weeks(weeks_str: str) -> set[int]:
@@ -381,9 +418,11 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
     sched = store.get_schedule()
     cur = sched.get("curriculum", {})
     lessons = sched.get("lessons", [])
-    base = {"week": 1, "maxWeek": 0, "rangeLabel": "", "empty": not lessons,
+    base = {"week": 1, "maxWeek": 0, "curWeek": 0, "rangeLabel": "",
+            "empty": not lessons,
             "dayLabels": [], "dayDates": [], "isTodayCol": [],
-            "nodeLabels": [], "nodeTimes": [], "currentNode": -1,
+            "nodeLabels": [], "nodeTimes": [], "nodeTimesEnd": [],
+            "currentNode": -1,
             "nowLine": -1.0, "blocks": []}
     if not lessons:
         base["week"] = 0   # 空缓存也是"学期未同步"，别装第 1 周
@@ -391,6 +430,7 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
     fw0 = cur.get("firstWeekDate") or cur.get("firstWeekDateReal")
     # 无学期锚点：week=0（UI 显示"学期未同步"，别装第 1 周误导）
     week = max(1, week_of(sched, now.date()) + offset) if fw0 else 0
+    base["curWeek"] = week_of(sched, now.date()) if fw0 else 0
     maxw = int(cur.get("maxWeek") or 0)
     if maxw and week:
         week = min(week, maxw)
@@ -417,12 +457,18 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
 
     from xuexitong_mcp.client import parse_section_times
     times = parse_section_times(cur.get("lessonTimeConfigArray"))
+    set_course_colors(course_colors(lessons))
     max_node = 0
     blocks: list[dict] = []
     for les in lessons:
         if week not in expand_weeks(les.get("weeks", "")):
             continue
-        d = int(les.get("dayOfWeek") or 1)
+        try:
+            d = int(les.get("dayOfWeek"))
+        except (TypeError, ValueError):
+            d = 1
+        if not 1 <= d <= 7:
+            continue   # 脏数据（8/0/None）别炸网格也别悄悄落进周一列
         begin = int(les.get("beginNumber") or 1)
         length = int(les.get("length") or 1)
         name = les.get("name") or "?"
@@ -432,25 +478,35 @@ def week_grid(store, offset: int = 0, now: datetime | None = None) -> dict:
                        "bg": bg, "fg": fg})
         max_node = max(max_node, begin + length - 1)
 
-    base["nodeLabels"] = [str(n) for n in range(1, max_node + 1)]
+    # 节次轨恒铺到晚上（≈21:50）——没晚课的周也把晚上的行留出来，
+    # 网格高度整学期稳定，不随周的课量伸缩/滚动。课多过 11 节照实扩。
+    node_count = max(max_node, min(len(times), 11), 1)
+    base["nodeLabels"] = [str(n) for n in range(1, node_count + 1)]
     base["nodeTimes"] = [
         times[n - 1][0].strftime("%H:%M") if n <= len(times) else ""
-        for n in range(1, max_node + 1)]
+        for n in range(1, node_count + 1)]
+    base["nodeTimesEnd"] = [
+        times[n - 1][1].strftime("%H:%M") if n <= len(times) else ""
+        for n in range(1, node_count + 1)]
     base["blocks"] = blocks
 
-    # 当前节次（时间轨胶囊高亮）+ 时间红线。都用节次表的真实下课时间：
-    # 用"下一节 start"兜底会把午休/课间空档摊进上一节，红线在空档里
-    # 缓慢爬行像"这节课还没上完"——空档就不画线，诚实
+    # 当前节次（时间轨胶囊高亮）+ 时间红线。节内按真实起止比例定位；
+    # 课间/午休空档把红线钉在下节课的上边界（网格线上，诚实且不消失）；
+    # 首节之前/末节之后（一大早、深夜）不画。
     if offset == 0 and in_term and times:
         cur_min = now.hour * 60 + now.minute
-        starts = [t[0].hour * 60 + t[0].minute for t in times[:max_node]]
-        ends = [t[1].hour * 60 + t[1].minute for t in times[:max_node]]
-        for i, s in enumerate(starts):
-            e = ends[i] if i < len(ends) and ends[i] > s else s + 45
-            if s <= cur_min < e:
-                base["currentNode"] = i
-                base["nowLine"] = i + (cur_min - s) / max(1, e - s)
-                break
+        starts = [t[0].hour * 60 + t[0].minute for t in times[:node_count]]
+        ends = [t[1].hour * 60 + t[1].minute for t in times[:node_count]]
+        if starts and starts[0] <= cur_min < ends[-1]:
+            for i, s in enumerate(starts):
+                e = ends[i] if i < len(ends) and ends[i] > s else s + 45
+                if s <= cur_min < e:
+                    base["currentNode"] = i
+                    base["nowLine"] = i + (cur_min - s) / max(1, e - s)
+                    break
+                if cur_min < s:   # 空档：贴下节课上沿
+                    base["nowLine"] = float(i)
+                    break
     return base
 
 

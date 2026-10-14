@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import "." as Ui
 
 // 动态页：巡检事件时间线（新资料/作业/通知/提醒）
@@ -22,6 +23,13 @@ Item {
         contentHeight: col.height + 14
         clip: true
         boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar {
+            policy: ScrollBar.AsNeeded
+            implicitWidth: 4
+            contentItem: Rectangle {
+                radius: 2; color: Ui.Theme.border
+            }
+        }
 
         Column {
             id: col

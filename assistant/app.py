@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import sys
+import time
 import traceback
 from ctypes import wintypes
 from datetime import datetime
@@ -282,8 +283,10 @@ class ScanWorker(QObject):
     def _today_rows(self) -> list[dict]:
         try:
             sched = self.client.fetch_schedule_full(refresh=False)
-            from assistant.snapshot import week_lessons, week_of
+            from assistant.snapshot import (course_colors, set_course_colors,
+                                            week_lessons, week_of)
             from xuexitong_mcp.widget import lesson_rows
+            set_course_colors(course_colors(sched.get("lessons", [])))
             today = datetime.now().date()
             wk = week_of(sched, today)
             return lesson_rows(week_lessons(sched, wk),
@@ -767,6 +770,22 @@ def already_running() -> bool:
     return False
 
 
+# 命名互斥量句柄（必须留在全局引用里，进程退出才释放）
+_mutex_handle = None
+
+
+def _grab_mutex() -> bool:
+    """Windows 命名互斥量做单例仲裁。QLocalServer 的具名管道允许多实例
+    listen 同名（双冷启动实测两个都返回 True），锁不住。"""
+    global _mutex_handle
+    import ctypes
+    ERROR_ALREADY_EXISTS = 183
+    _mutex_handle = ctypes.windll.kernel32.CreateMutexW(
+        None, False, f"Global\\{LOCK_NAME}")
+    return not (_mutex_handle
+                and ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS)
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -775,9 +794,14 @@ def main() -> int:
     if already_running():
         print("学习通小助手已在运行（托盘可见）")
         return 0
+    if not _grab_mutex():   # 双冷启动竞态：管道探测都失败时靠互斥量兜底
+        print("学习通小助手已在运行（互斥锁被占）")
+        return 0
     app = App()
     server = QLocalServer()
-    server.listen(LOCK_NAME)
+    if not server.listen(LOCK_NAME):   # 锁没拿到（同名管道被占）必须退出，
+        print("学习通小助手已在运行（锁被占用）")  # 否则就双实例双托盘了
+        return 0
     return app.run()
 
 
@@ -811,22 +835,46 @@ def _screenshot_mode() -> int:
         app.bridge.set_tab(i)
         QTimer.singleShot(500, lambda: (shoot(f"{base}_t{i}.png"), step(i + 1)))
 
+    def _img_blank(img) -> bool:
+        """全图同色 = 离屏帧没重绘（黑块/白块假象，历史坑）。"""
+        if img is None or img.isNull():
+            return True
+        qi = img.toImage() if hasattr(img, "toImage") else img
+        s = qi.scaled(24, 24)
+        first = s.pixelColor(0, 0)
+        return all(s.pixelColor(x, y) == first
+                   for y in range(24) for x in range(24))
+
     def grab_detail_win(path: str) -> None:
+        from PySide6.QtCore import Qt
         w = app.detail_win
+        # 普通窗口会被任何置顶窗口（视频播放器/终端）盖住，区域截屏
+        # 就截到别人了。临时把自己也置顶 → 区域截屏 → 撤销置顶。
+        old_flags = w.flags()
+        w.setFlags(old_flags | Qt.WindowStaysOnTopHint)
+        w.show()   # 换 flags 会重建原生窗口，显式保显示
         w.raise_()
+        w.requestActivate()
+        app.qapp.processEvents()
+        time.sleep(0.15)   # 等窗口管理器重排 z 序
         app.qapp.processEvents()
         m = w.frameMargins()
         img = w.screen().grabWindow(
             0, int(w.x() - m.left()), int(w.y() - m.top()),
             int(w.width() + m.left() + m.right()),
             int(w.height() + m.top() + m.bottom()))
+        w.setFlags(old_flags)
         img.save(path)
         print("saved:", path, img.width(), "x", img.height())
 
     def detail_step(i: int):
         if i > 4:
-            app.quit()   # 走 App.quit：收 worker 线程+存盘，防析构竞态
-            return
+            # 调试模式专用硬退：App.quit() 会因 worker 线程悬住退不干净
+            # （实测残留僵尸进程占着全局热键）。截图模式无状态要保。
+            print("screenshot done")
+            sys.stdout.flush(); sys.stderr.flush()
+            import os
+            os._exit(0)
         app.detail_bridge.gotoTab(i)
         app.detail_win.show()
         app.detail_win.raise_()

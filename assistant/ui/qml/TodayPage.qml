@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import "." as Ui
 
 // 今天页：日期头 + 今日概览 + 课程手风琴（点行展开详情）+ 最近截止
@@ -24,6 +25,14 @@ Item {
         contentHeight: col.height + 14
         clip: true
         boundsBehavior: Flickable.StopAtBounds
+        // 课多时一屏放不下：滚动条让"下面还有"看得见
+        ScrollBar.vertical: ScrollBar {
+            policy: ScrollBar.AsNeeded
+            implicitWidth: 4
+            contentItem: Rectangle {
+                radius: 2; color: Ui.Theme.border
+            }
+        }
 
         Column {
             id: col
@@ -141,19 +150,20 @@ Item {
                             anchors.leftMargin: 9; anchors.rightMargin: 8
                             spacing: 10
 
-                            // 课程色块（cc-switch 的品牌 logo tile 等效物）
+                            // 课程色块：永远用课程身份色（与课表页一致）——
+                            // "已结束就把色块变灰"会让整页傍晚全灰、和课表
+                            // 对不上色；结束态交给徽章和标题变淡表达
                             Rectangle {
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: 36; height: 36; radius: 10
-                                color: lessonCard.isDone ? Ui.Theme.secondary
-                                       : modelData.cbg || Ui.Theme.secondary
+                                color: modelData.cbg || Ui.Theme.secondary
                                 border.width: 1
                                 border.color: Ui.Theme.border
+                                opacity: lessonCard.isDone ? 0.55 : 1
                                 Text {
                                     anchors.centerIn: parent
                                     text: modelData.name.length > 0 ? modelData.name[0] : "?"
-                                    color: lessonCard.isDone ? Ui.Theme.faint
-                                           : modelData.cfg || Ui.Theme.muted
+                                    color: modelData.cfg || Ui.Theme.muted
                                     font.pixelSize: 15; font.bold: true
                                     font.family: Ui.Theme.fontFamily
                                 }
@@ -183,21 +193,26 @@ Item {
                                 }
                             }
 
-                            // 状态 chip
+                            // 状态 chip：进行中/未开始蓝系，已结束灰——
+                            // 单看徽章也要能分清"还要上"和"上完了"
                             Rectangle {
                                 id: chip
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: chipTxt.width + 14; height: 20; radius: 10
-                                color: lessonCard.isCur || lessonCard.isPar ? Ui.Theme.primarySoft
-                                       : Ui.Theme.secondary
+                                color: lessonCard.isCur || lessonCard.isPar
+                                       ? Ui.Theme.primarySoft
+                                       : lessonCard.isDone ? Ui.Theme.secondary
+                                       : Ui.Theme.primarySoft
                                 Text {
                                     id: chipTxt
                                     anchors.centerIn: parent
                                     text: lessonCard.isCur ? "进行中"
                                           : lessonCard.isPar ? "同时段"
                                           : lessonCard.isDone ? "已结束" : "未开始"
-                                    color: lessonCard.isCur || lessonCard.isPar ? Ui.Theme.primary
-                                           : lessonCard.isDone ? Ui.Theme.faint : Ui.Theme.muted
+                                    color: lessonCard.isCur || lessonCard.isPar
+                                           ? Ui.Theme.primary
+                                           : lessonCard.isDone ? Ui.Theme.faint
+                                           : Ui.Theme.primary
                                     font.pixelSize: 10
                                     font.family: Ui.Theme.fontFamily
                                 }

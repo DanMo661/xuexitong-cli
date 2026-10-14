@@ -64,9 +64,11 @@ class Bridge(QObject):
         self._events: list = []       # 时间线
         self._ddl: list = []          # DDL 看板行
         self._grid: dict = {           # 周网格（预置全键：QML 首帧绑定不撞 null）
-            "week": 1, "maxWeek": 0, "rangeLabel": "", "dayLabels": [],
-            "isTodayCol": [], "nodeLabels": [], "nodeTimes": [],
-            "cells": [], "empty": True}
+            "week": 1, "maxWeek": 0, "curWeek": 0, "rangeLabel": "",
+            "dayLabels": [], "dayDates": [], "isTodayCol": [],
+            "nodeLabels": [], "nodeTimes": [], "nodeTimesEnd": [],
+            "blocks": [], "currentNode": -1, "nowLine": -1.0,
+            "empty": True}
         self._scanning = False
         self._soon_minutes = -1        # 下一节剩余分钟（状态点紧迫感）
         self._synced = True            # 课表缓存是否可用（未同步别装"没课"）
@@ -119,7 +121,8 @@ class Bridge(QObject):
         self._unread = snap.get("unread", 0)
         self._last_sync = snap.get("last_sync", "—")
         all_rows = snap.get("rows", [])
-        rows = [_lesson_row(r) for r in all_rows[:10]]
+        rows = [_lesson_row(r) for r in all_rows]   # 今天页可滚动，不截断
+                                                      # （截 10 条时计数还是全量，>10 节课对不上）
         # 对比忽略 progress（当前节每分钟都变）：行结构没变就不重置模型
         def _key(rs):
             # location/teacher 变更（教务改地点）也要触发更新
