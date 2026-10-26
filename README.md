@@ -150,6 +150,35 @@ python -m venv .venv
 .venv\Scripts\python -m assistant.app --screenshot out.png   # UI 自截图
 ```
 
+## 命令行 xxt（xuexitong-cli，v1.0）
+
+不打开浏览器、不进 GUI，终端里直接查——像 bili-cli 之于 B 站。安装
+（`pip install -e .`）后两个入口等价：`xuexitong-cli` / `xxt`，也可以
+`.venv\Scripts\python -m xuexitong_mcp.cli` 直跑。凭据与 MCP/桌面助手
+共用同一份 `config.json`；本学期范围自动复用桌面助手的课表缓存
+（没有就现场全学期拉取，首次约十几秒）。**只读 + 资料下载**，与 MCP
+同一红线：不做签到/刷课/答题/提交。
+
+```bash
+xxt today                     # 今天有什么课（含进行中/已结束状态）
+xxt week [12]                 # 本周 / 第 12 周课表（按天分组）
+xxt hw                        # 待交作业截止看板（默认只看本学期）
+xxt exam                      # 考试安排（默认只看本学期，--all 看全部）
+xxt notice [--unread]         # 通知中心
+xxt progress                  # 任务点进度（默认只看本学期）
+xxt courses                   # 课程列表（★=本学期课表内）
+xxt whoami                    # 姓名/学校/uid
+xxt materials 数字信号处理    # 课程资料区（含下载用编号）
+xxt materials 数图 --find 实验   # 递归搜文件名
+xxt download 数图 --find 实验 --dir D:\dst   # 下载第一个匹配
+xxt pan                       # 个人云盘
+xxt ics -o 课表.ics           # 全学期课表导出日历
+```
+
+- 同课两班自动去重；表格按 CJK 显示宽度对齐，GBK 控制台自动切 UTF-8 输出
+- 学期过滤规则与桌面助手一致：以课表缓存里的本学期课程为准，往年课
+  默认不出现在 hw/exam/progress（`--all*` 参数可看全部）
+
 - 旧版 tkinter 悬浮窗仍保留（`python -m xuexitong_mcp.widget`），新功能一律进 `assistant/`
 - 运行期状态文件 `settings.json`（含 SMTP 授权码）、`store.json`（巡检基线）、`widget_geometry.json` 均已 gitignore，绝不入库；模板见 `settings.example.json`
 - 可选 PyInstaller 打包（`pyinstaller --onedir --windowed assistant/app.py`，排除 QtWebEngine 后约 128MB）：数据目录取 exe 所在目录（或设 `XXT_HOME` 环境变量重定向），把 `config.json` 放 exe 旁即可独立运行；打包形态下首次登录态适配仍在迭代，自用推荐 venv + bat 方式

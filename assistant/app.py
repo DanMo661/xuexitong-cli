@@ -802,6 +802,7 @@ def main() -> int:
     if not server.listen(LOCK_NAME):   # 锁没拿到（同名管道被占）必须退出，
         print("学习通小助手已在运行（锁被占用）")  # 否则就双实例双托盘了
         return 0
+    app.widget.show()   # 桌面小组件的意义就是开机可见；藏进托盘走"显示/隐藏"
     return app.run()
 
 

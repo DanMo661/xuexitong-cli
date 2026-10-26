@@ -88,28 +88,41 @@ class Watcher:
             log.warning("登录保持失败：%s", e)
             return events
 
-        # 课表活跃课程集合（顺带刷新课表缓存，UI 也能用）
+        # 课表活跃课程集合（顺带刷新课表缓存，UI 也能用）。
+        # 判定以课名为准：服务端 lesson.courseId 有 6/11 门是空串（真实
+        # 缓存实锤），按 id 匹配会把毛概/电磁场整批踢出巡检范围
+        sched_names: set[str] = set()
         active_cids: set[str] = set()
         try:
             sched = self.client.fetch_schedule_full(refresh=False)
             if hasattr(self.store, "set_schedule") and sched.get("lessons"):
                 self.store.set_schedule(sched)   # 回写落盘缓存供下次秒开
             for ls in sched.get("lessons", []):
-                active_cids.add(str(ls.get("courseid") or ls.get("courseId") or ""))
+                n = (ls.get("name") or "").strip()
+                if n:
+                    sched_names.add(n)
+                cid = str(ls.get("courseid") or ls.get("courseId") or "")
+                if cid:
+                    active_cids.add(cid)
         except Exception as e:
             log.warning("课表获取失败，本轮按已存活跃集扫：%s", e)
-        active_cids.discard("")
+
+        courses = self.client.fetch_courses()
+        if sched_names:
+            def _name_active(c: dict) -> bool:
+                n = (c.get("name") or "").strip()
+                return any(n == k or (k in n or n in k) for k in sched_names)
+            # 名字对上但课表没给 id 的课，用课程列表里的真实 id 补进活跃集
+            active_cids |= {str(c["courseid"]) for c in courses
+                            if _name_active(c)}
         if active_cids:
             self.store.set_active(active_cids)
 
-        courses = self.client.fetch_courses()
         if full:
             targets = courses
         else:
-            active_keys = {k for k, _ in self.store.active_courses()}
             targets = [c for c in courses
-                       if any(k.split("|")[0] == str(c["courseid"])
-                              for k in active_keys)][:self.max_courses]
+                       if str(c["courseid"]) in active_cids][:self.max_courses]
 
         for c in targets:
             if stop_check and stop_check():
@@ -252,12 +265,18 @@ class Watcher:
     # ---------- 考试表 / 任务点 ----------
 
     def _scan_exams(self) -> list[Event]:
-        """考试安排：每轮 1 个请求；新考试进事件（首见建基线不报）。"""
+        """考试安排：每轮 1 个请求；新考试进事件（首见建基线不报）。
+
+        只留本学期的——考试表混着往年记录（图论/蓝桥杯/上学期期末），
+        全放进来用户看到的就是"八年前的考试"列表。"""
         try:
             parsed = parse_exam_rows(self.client.fetch_exams())
         except Exception as e:
             log.warning("考试表拉取失败：%s", e)
             return []
+        term_start = self._term_start()
+        if term_start:
+            parsed = [r for r in parsed if r["start"].date() >= term_start]
         self.store.set_exams(parsed)
         by_key = {f"{r['name']}|{r['start'].strftime('%Y-%m-%d %H:%M')}": r
                   for r in parsed}
@@ -273,19 +292,34 @@ class Watcher:
                        f"{r['durationMin']}分钟"))
         return events
 
+    def _term_start(self):
+        """本学期第 1 周周一（课表锚点）；拿不到返回 None（不过滤兜底）。"""
+        try:
+            from xuexitong_mcp.client import ms_to_date
+            cur = self.store.get_schedule().get("curriculum", {})
+            fw = cur.get("firstWeekDate") or cur.get("firstWeekDateReal")
+            return ms_to_date(int(fw)) if fw else None
+        except Exception:
+            return None
+
     def refresh_progress(self, stop_check=None, courses=None) -> bool:
         """任务点总览：逐课查询重（每课 1-2 请求），限速 0.4s/课。
 
-        只在每日全量扫或用户手动刷新时跑；courses 缺省扫全部历史课
-        （网课不在课表里，恰好是任务点最重的）。中断（退出程序）时
-        不写缓存——半份数据会把"今天已刷"记死，整天不再重试。
-        返回是否完整写入。
+        只在每日全量扫或用户手动刷新时跑；只扫本学期课表内的课
+        （往年课不扫不报）。中断（退出程序）时不写缓存——半份数据
+        会把"今天已刷"记死，整天不再重试。返回是否完整写入。
         """
         from datetime import datetime as _dt
         if self.store.progress_date == _dt.now().strftime("%Y-%m-%d"):
             return True
         if courses is None:
             courses = self.client.fetch_courses()
+        # 用户规矩：任务点以本学期为主——往年课（马原/高数/上学期网课）
+        # 不再扫不再喊"没上完"。课表锚点拿不到时保底全扫
+        active_ids = {k.split("|")[0] for k, _ in self.store.active_courses()}
+        if active_ids:
+            courses = [c for c in courses
+                       if str(c["courseid"]) in active_ids]
         rows: list[dict] = []
         for co in courses:
             if stop_check and stop_check():

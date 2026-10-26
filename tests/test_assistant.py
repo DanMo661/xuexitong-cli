@@ -193,6 +193,87 @@ def test_parse_send_time_variants():
     assert t > 1.7e9 and t < 2.2e9
 
 
+def test_progress_active_only_and_exams_term_filter():
+    """用户规矩：任务点/考试都以本学期为主——往年课不扫不报。"""
+    import calendar
+    from datetime import timedelta
+    from assistant.watcher import Watcher
+    s = _store()
+    monday = NOW.date() - timedelta(days=NOW.weekday())
+    s.set_schedule({"curriculum": {
+        "firstWeekDate": calendar.timegm(monday.timetuple()) * 1000,
+        "maxWeek": 20, "lessonTimeConfigArray": ["8:00-8:50"]},
+        "lessons": []})
+    s._data["courses"] = {"111|1": {"active": True}, "999|2": {"active": False}}
+
+    class FakeClient:
+        def fetch_courses(self):
+            return [{"name": "本学期", "courseid": "111", "clazzid": "1"},
+                    {"name": "往年课", "courseid": "999", "clazzid": "2"}]
+
+        def fetch_chapters(self, co, with_nodes=False):
+            return {"progress": (1, 5)}
+
+        def fetch_exams(self):
+            nxt = NOW + timedelta(days=7)
+            return [
+                ["", "新考试", f"{nxt:%Y-%m-%d} 10:00 至 {nxt:%Y-%m-%d} 11:00",
+                 "60", "未开始", "未交", "---", "", ""],
+                ["", "旧考试", "2025-06-01 10:00 至 2025-06-01 11:00",
+                 "60", "已结束", "未交", "---", "", ""],
+            ]
+
+    w = Watcher(FakeClient(), s, probe_download=False)
+    assert w.refresh_progress() is True
+    names = [r["course"] for r in s.get_progress()]
+    assert names == ["本学期"], names      # 往年课不扫、不进缓存
+    w._scan_exams()
+    exams = [r["name"] for r in s.get_exams()]
+    assert exams == ["新考试"], exams       # 学期开始前的考试不入库
+
+
+def test_progress_view_dedups_same_course_two_classes():
+    from assistant.snapshot import progress_view
+    v = progress_view([
+        {"course": "数字信号处理", "done": 3, "total": 10},
+        {"course": "数字信号处理", "done": 10, "total": 10},
+    ], active_names={"数字信号处理"})
+    # 同课两班只留更完整那行：列表一行、缺口不翻倍
+    assert len(v["rows"]) == 1 and v["rows"][0]["left"] == 0
+    assert v["totalLeft"] == 0
+
+
+def test_cli_helpers_and_parser():
+    """CLI 纯函数层：CJK 宽度/截断/子命令装配（不碰网络）。"""
+    from xuexitong_mcp import cli
+    assert cli._w("数字信号处理") == 12      # 6 全角 = 12
+    assert cli._w("HW1") == 3
+    assert cli._pad("ab", 5) == "ab   "
+    # 截断按显示宽度：8 全角字宽 16 → 限 10 留 8 + 省略号
+    assert cli._w(cli._clip("数字信号处理_DSP", 10)) <= 10
+    assert cli._clip("abc", 10) == "abc"
+    p = cli.build_parser()
+    a = p.parse_args(["today"])
+    assert a.fn is cli.cmd_today
+    a = p.parse_args(["materials", "数图", "--find", "实验"])
+    assert a.course == "数图" and a.find == "实验"
+    a = p.parse_args(["exam", "--all"])
+    assert a.all is True
+
+
+def test_client_exam_rows_parse():
+    from xuexitong_mcp.client import parse_exam_rows
+    rows = parse_exam_rows([
+        ["", "图论试卷", "2026-12-19 09:00 至 2026-12-30 22:00",
+         "180", "未开始", "未交", "---", "未设置终端", ""],
+        ["", "坏行", "时间乱写", "60", "", "", "", ""],
+    ])
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["name"] == "图论试卷" and r["durationMin"] == "180"
+    assert f"{r['start']:%Y-%m-%d %H:%M}" == "2026-12-19 09:00"
+
+
 def test_notices_cache_fields_and_read():
     # int 型毫秒 sendTime 不炸缓存写入（nitpick R2 B1）
     s = _store()

@@ -296,46 +296,50 @@ Item {
                 font.family: Ui.Theme.fontFamily
             }
         }
+    }
 
-        // 拖动翻周：按住左/右拖，超阈值松手 = 上/下一周（跟手位移有阻尼）
-        MouseArea {
-            id: swipeArea
-            anchors.fill: parent
-            property real pressX: 0
-            property bool dragging: false
-            onPressed: mouse => {
-                pressX = mouse.x
-                dragging = true
-                snapBack.stop()
+    // ---- 拖动翻周：按住左/右拖，超阈值松手 = 上/下一周（跟手位移有阻尼）。
+    // 盖住导航行之下的整页（含星期表头——最自然的抓取位置），课程块
+    // 本身无点击处理器，不受影响
+    MouseArea {
+        id: swipeArea
+        y: 40
+        width: parent.width
+        height: parent.height - 40
+        property real pressX: 0
+        property bool dragging: false
+        onPressed: mouse => {
+            pressX = mouse.x
+            dragging = true
+            snapBack.stop()
+        }
+        onPositionChanged: mouse => {
+            if (dragging)
+                page.dragOffset = (mouse.x - pressX) * 0.35
+        }
+        onReleased: {
+            dragging = false
+            const dx = mouse.x - pressX
+            const canPrev = (Bridge.grid.week || 1) > 1
+            const canNext = !Bridge.grid.maxWeek
+                            || (Bridge.grid.week || 1) < Bridge.grid.maxWeek
+            if (dx <= -55 && canNext) {
+                page.weekOffset++
+                Bridge.requestWeek(page.weekOffset)
+                page.dragOffset = Math.max(dx * 0.35, -110)
+            } else if (dx >= 55 && canPrev) {
+                page.weekOffset--
+                Bridge.requestWeek(page.weekOffset)
+                page.dragOffset = Math.min(dx * 0.35, 110)
             }
-            onPositionChanged: mouse => {
-                if (dragging)
-                    page.dragOffset = (mouse.x - pressX) * 0.35
-            }
-            onReleased: {
-                dragging = false
-                const dx = mouse.x - pressX
-                const canPrev = (Bridge.grid.week || 1) > 1
-                const canNext = !Bridge.grid.maxWeek
-                                || (Bridge.grid.week || 1) < Bridge.grid.maxWeek
-                if (dx <= -55 && canNext) {
-                    page.weekOffset++
-                    Bridge.requestWeek(page.weekOffset)
-                    page.dragOffset = Math.max(dx * 0.35, -110)
-                } else if (dx >= 55 && canPrev) {
-                    page.weekOffset--
-                    Bridge.requestWeek(page.weekOffset)
-                    page.dragOffset = Math.min(dx * 0.35, 110)
-                }
-                snapBack.restart()
-            }
-            onCanceled: { dragging = false; snapBack.restart() }
-            NumberAnimation {
-                id: snapBack
-                target: page; property: "dragOffset"; to: 0
-                duration: 180
-                easing.type: Easing.Bezier; easing.bezierCurve: Ui.Theme.ccEnter
-            }
+            snapBack.restart()
+        }
+        onCanceled: { dragging = false; snapBack.restart() }
+        NumberAnimation {
+            id: snapBack
+            target: page; property: "dragOffset"; to: 0
+            duration: 180
+            easing.type: Easing.Bezier; easing.bezierCurve: Ui.Theme.ccEnter
         }
     }
 }

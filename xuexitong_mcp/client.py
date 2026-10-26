@@ -251,6 +251,39 @@ def parse_section_times(config_array) -> list[tuple[dtime, dtime]]:
     return out
 
 
+def parse_exam_rows(raw_rows, now=None) -> list[dict]:
+    """fetch_exams 的 tds 行 → 结构化行（含 start/end datetime）。
+
+    列序以 server.py 排版为准：tds[1]名称 tds[2]时间 tds[3]时长
+    tds[4]考试状态 tds[5]作答状态 tds[6]分数 tds[7]方式。
+    解析失败整行跳过——页面格式漂移时不至于拖垮整块看板。
+    """
+    now = now or datetime.now(_TZ_CN)
+    out = []
+    for tds in raw_rows:
+        if not isinstance(tds, list) or len(tds) < 8:
+            continue
+        name, time_s = (tds[1] or "").strip(), (tds[2] or "").strip()
+        m = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", time_s)
+        e = re.search(r"至\s*(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", time_s)
+        if not name or not m:
+            continue
+        try:
+            start = datetime.strptime(f"{m.group(1)} {m.group(2)}",
+                                      "%Y-%m-%d %H:%M")
+            end = datetime.strptime(f"{e.group(1)} {e.group(2)}",
+                                    "%Y-%m-%d %H:%M") if e else start
+        except ValueError:
+            continue
+        out.append({"name": name, "start": start, "end": end,
+                    "durationMin": (tds[3] or "").strip(),
+                    "status": (tds[4] or "").strip(),
+                    "answer": (tds[5] or "").strip(),
+                    "score": (tds[6] or "").strip(),
+                    "mode": (tds[7] or "").strip()})
+    return out
+
+
 def nearest_datetime_for(month_day: str, today: date) -> datetime | None:
     """作业详情的作答时间只有"MM-DD HH:MM"、没有年份。
 
@@ -674,19 +707,24 @@ class ChaoxingClient:
         os.makedirs(save_dir, exist_ok=True)
         cd = ""
         total = 0
-        with self.session.get(cdn, headers={"Referer": "https://pan-yz.chaoxing.com/"},
-                              stream=True, timeout=DOWNLOAD_TIMEOUT) as r2:
-            if r2.status_code != 200:
-                raise RuntimeError(f"CDN 下载失败: HTTP {r2.status_code}")
-            cd = r2.headers.get("Content-Disposition", "")
-            fname = filename or parse_cd_filename(cd) or f"{data_id}.bin"
-            path = os.path.join(save_dir, sanitize_filename(fname))
-            with open(path, "wb") as f:
-                for chunk in r2.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
-                        total += len(chunk)
-        return {"path": path, "size": total}
+        import time as _t
+        for attempt in (1, 2):   # CDN 偶发 202（限流）——歇一下重试一次
+            with self.session.get(cdn, headers={"Referer": "https://pan-yz.chaoxing.com/"},
+                                  stream=True, timeout=DOWNLOAD_TIMEOUT) as r2:
+                if r2.status_code == 200:
+                    cd = r2.headers.get("Content-Disposition", "")
+                    fname = filename or parse_cd_filename(cd) or f"{data_id}.bin"
+                    path = os.path.join(save_dir, sanitize_filename(fname))
+                    with open(path, "wb") as f:
+                        for chunk in r2.iter_content(chunk_size=65536):
+                            if chunk:
+                                f.write(chunk)
+                                total += len(chunk)
+                    return {"path": path, "size": total}
+            if attempt == 1:
+                _t.sleep(1.5)
+        raise RuntimeError(f"CDN 下载失败: HTTP {r2.status_code}（连试两次；"
+                           f"可能被限流，稍后再试）")
 
     def fetch_homework(self, c: dict, refresh: bool = False) -> dict:
         """作业列表：{progress: (done,total)|None,
@@ -746,13 +784,16 @@ class ChaoxingClient:
         return detail
 
     def fetch_deadline_overview(self, course: str | None = None,
-                                horizon_days: int = 90) -> list[dict]:
+                                horizon_days: int = 90,
+                                only_courses: set[str] | None = None
+                                ) -> list[dict]:
         """全部（或 course 指定一门）课程的未完成作业 → 截止看板数据。
 
         截止时间只在作业详情页上，因此逐份请求详情页；为控制请求数，
         已完成/已提交（待批阅）的直接跳过，只对未提交的取详情。
         返回按"未来（近→远）→ 已过期（最久→最近）→ 截止未知"排序的行；
         horizon_days 只收未来 N 天内截止的（已过期与截止未知始终保留）。
+        only_courses：课名集合（双向包含匹配）——CLI/巡检只看本学期课。
         """
         if course:
             found = self.find_course(course)
@@ -761,6 +802,10 @@ class ChaoxingClient:
             courses = [found]
         else:
             courses = self.fetch_courses()
+        if only_courses:   # 空集=没拿到课表，别把看板过滤成全空
+            courses = [c for c in courses
+                       if any(k in c["name"] or c["name"] in k
+                              for k in only_courses)]
         today = datetime.now(_TZ_CN).date()
         horizon = today + timedelta(days=max(1, horizon_days))
         rows: list[dict] = []
@@ -797,12 +842,21 @@ class ChaoxingClient:
         return [r for r in rows
                 if r["deadline_dt"] is None or r["deadline_dt"].date() <= horizon]
 
-    def fetch_progress_overview(self, stop_check=None) -> list[dict]:
+    def fetch_progress_overview(self, stop_check=None,
+                                only_courses: set[str] | None = None
+                                ) -> list[dict]:
         """全部课程的章节任务点完成进度一览（逐课查询，逐课容错，
         未开放章节功能的课记 error 而不是让整个看板失败）。
-        stop_check 返回 True 时尽快中止（退出程序时用）。"""
+        stop_check 返回 True 时尽快中止（退出程序时用）。
+        only_courses：课名集合（双向包含）——只查本学期课。"""
+        if only_courses:   # 空集=没拿到课表，别扫成全空
+            courses = [c for c in self.fetch_courses()
+                       if any(k in c["name"] or c["name"] in k
+                              for k in only_courses)]
+        else:
+            courses = self.fetch_courses()
         out: list[dict] = []
-        for co in self.fetch_courses():
+        for co in courses:
             if stop_check and stop_check():
                 break
             row = {"course": co["name"], "done": None, "total": None, "error": None}

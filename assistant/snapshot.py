@@ -167,40 +167,11 @@ def _course_match(course: str, names: set[str]) -> bool:
 
 # ---------- 考试看板（fetch_exams 原始行 → UI 行） ----------
 
+# 协议解析已下沉 client.py（CLI 也要用，不能只在 assistant 包）；
+# 这里再导出保持 watcher/tests 的既有引用不断
+from xuexitong_mcp.client import parse_exam_rows  # noqa: F401,E402
+
 import re as _re
-
-
-def parse_exam_rows(raw_rows, now: datetime | None = None) -> list[dict]:
-    """fetch_exams 的 tds 行 → 结构化行（含 start/end datetime）。
-
-    列序以 server.py 排版为准：tds[1]名称 tds[2]时间 tds[3]时长
-    tds[4]考试状态 tds[5]作答状态 tds[6]分数 tds[7]方式。
-    解析失败整行跳过——页面格式漂移时不至于拖垮整块看板。
-    """
-    now = now or datetime.now()
-    out: list[dict] = []
-    for tds in raw_rows:
-        if not isinstance(tds, list) or len(tds) < 8:
-            continue
-        name, time_s = (tds[1] or "").strip(), (tds[2] or "").strip()
-        m = _re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", time_s)
-        e = _re.search(r"至\s*(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", time_s)
-        if not name or not m:
-            continue
-        try:
-            start = datetime.strptime(f"{m.group(1)} {m.group(2)}",
-                                      "%Y-%m-%d %H:%M")
-            end = datetime.strptime(f"{e.group(1)} {e.group(2)}",
-                                    "%Y-%m-%d %H:%M") if e else start
-        except ValueError:
-            continue
-        out.append({"name": name, "start": start, "end": end,
-                    "durationMin": (tds[3] or "").strip(),
-                    "status": (tds[4] or "").strip(),
-                    "answer": (tds[5] or "").strip(),
-                    "score": (tds[6] or "").strip(),
-                    "mode": (tds[7] or "").strip()})
-    return out
 
 
 def exams_view(rows: list[dict], now: datetime | None = None,
@@ -298,7 +269,16 @@ def progress_view(rows: list[dict],
     Today 概览的缺口数——往年课不刷不该天天挂脸上，但网课漏刷得看见。
     """
     out, other = [], []
+    # 同课两班（courseid 同、clazzid 异）会在缓存里有两行——按课名去重
+    # 保更完整的那行，否则列表重复展示、totalLeft 翻倍
+    best: dict[str, dict] = {}
     for r in rows:
+        n = r.get("course") or "?"
+        old = best.get(n)
+        if old is None or ((r.get("done") or -1), (r.get("total") or -1)) > \
+                ((old.get("done") or -1), (old.get("total") or -1)):
+            best[n] = r
+    for r in best.values():
         course = r.get("course", "")
         in_terms = not active_names or _course_match(course, active_names)
         done, total = r.get("done"), r.get("total")

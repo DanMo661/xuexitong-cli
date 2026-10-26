@@ -34,6 +34,8 @@ dependencies = [
 [project.scripts]
 Xuexitong-mcp = "xuexitong_mcp.server:main"
 xuexitong-assistant = "xuexitong_mcp.widget:main"
+xuexitong-cli = "xuexitong_mcp.cli:main"
+xxt = "xuexitong_mcp.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/DanMo661/Xuexitong-mcp"
