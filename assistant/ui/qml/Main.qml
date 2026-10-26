@@ -4,7 +4,8 @@ import "." as Ui
 
 // 悬浮小窗：迷你条(360×64) ↔ 展开卡(360×540)
 // 展开卡 = 顶栏 + 标签页(今天/课表/作业/动态) + 页脚
-// 视觉纪律：cc-switch 浅色（白卡+灰边分层，主色只点缀当前项/交互态）
+// 视觉纪律：FLstyle 浅色（灰页 L95 + 白卡分层，无实线边框；
+// 主色只给选中段/交互态/品牌点，绝不铺大色块）
 Window {
     id: root
     width: 360
@@ -37,13 +38,11 @@ Window {
         property int tab: 0          // 0今天 1课表 2作业 3动态
         anchors.fill: parent
         radius: Ui.Theme.radiusLg
+        // 窗口缘 = 低透明线的预混实色（border 不吃透明色，见 Theme.lineSolid 注）
         border.width: 1
-        border.color: hover.hovered ? Ui.Theme.primaryBorder : Ui.Theme.border
-        Behavior on border.color { ColorAnimation { duration: 300 } }
-        color: Ui.Theme.card
+        border.color: Ui.Theme.lineSolid
+        color: Ui.Theme.page          // 窗口表面 = L95 页灰；卡片内容浮白
         clip: true
-
-        HoverHandler { id: hover }
 
         // ================= 顶栏 64px：状态点 + 当前/下一节 + 倒计时 + 角标 + 同步 =================
         Item {
@@ -113,7 +112,7 @@ Window {
                 anchors.leftMargin: 14
                 spacing: 10
 
-                // 品牌块 + 右下角状态角标（cc-switch 的 logo+角标模式）
+                // 品牌块 + 右下角状态角标（品牌点 = 主色允许的少数位置之一）
                 Rectangle {
                     id: logoTile
                     anchors.verticalCenter: parent.verticalCenter
@@ -131,12 +130,12 @@ Window {
                                                  && Bridge.soonMinutes >= 0
                                                  && Bridge.soonMinutes < 30
                     Rectangle {
-                        x: parent.width - 7; y: parent.height - 7
-                        width: 10; height: 10; radius: 5
+                        x: parent.width - 8; y: parent.height - 8
+                        width: 12; height: 12; radius: 6
                         color: Bridge.active ? Ui.Theme.primary
                                : logoTile.soon ? Ui.Theme.warn
-                               : Ui.Theme.muted
-                        border.width: 2; border.color: Ui.Theme.card
+                               : Ui.Theme.fg2
+                        border.width: 2; border.color: Ui.Theme.page
                         SequentialAnimation on opacity {
                             running: (Bridge.active || logoTile.soon) && root.visible
                             alwaysRunToEnd: true
@@ -156,15 +155,15 @@ Window {
                         width: parent.width
                         text: Bridge.title
                         color: Ui.Theme.fg
-                        font.pixelSize: 14; font.weight: Font.DemiBold
+                        font.pixelSize: Ui.Theme.fsHead; font.weight: Font.DemiBold
                         font.family: Ui.Theme.fontFamily
                         elide: Text.ElideRight
                     }
                     Text {
                         width: parent.width
                         text: Bridge.subtitle
-                        color: Ui.Theme.muted
-                        font.pixelSize: 11
+                        color: Ui.Theme.fg2
+                        font.pixelSize: Ui.Theme.fsCap
                         font.family: Ui.Theme.fontFamily
                         elide: Text.ElideRight
                         visible: text !== ""
@@ -175,30 +174,33 @@ Window {
             // 右侧功能区（声明在拖拽区之后 → 事件优先，不触发展开）
             Row {
                 id: rightZone
-                anchors.right: parent.right; anchors.rightMargin: 10
+                anchors.right: parent.right; anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
 
+                // 倒计时是唯一跳动数值 → tabular nums，数字宽度恒定不抖
                 Text {
                     visible: Bridge.countdown !== ""
                     anchors.verticalCenter: parent.verticalCenter
                     text: Bridge.countdown
-                    color: Bridge.active ? Ui.Theme.primary : Ui.Theme.muted
-                    font.pixelSize: 11; font.weight: Font.Medium
+                    color: Bridge.active ? Ui.Theme.primary : Ui.Theme.fg2
+                    font.pixelSize: Ui.Theme.fsSub; font.weight: Font.DemiBold
                     font.family: Ui.Theme.fontFamily
+                    font.features: { "tnum": 1 }
                 }
 
                 Rectangle {
                     visible: Bridge.unread > 0
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 30; height: 24; radius: 12
+                    width: 30; height: 22; radius: 11
                     color: Ui.Theme.danger
                     Text {
                         anchors.centerIn: parent
                         text: Bridge.unread
                         color: "#FFFFFF"
-                        font.pixelSize: 11; font.bold: true
+                        font.pixelSize: Ui.Theme.fsCap; font.bold: true
                         font.family: Ui.Theme.fontFamily
+                        font.features: { "tnum": 1 }
                     }
                     MouseArea {
                         anchors.fill: parent
@@ -207,27 +209,23 @@ Window {
                     }
                 }
 
+                // 同步钮 = 图标井：中性井底 + 强调色图形（暗底亮图形）
                 Rectangle {
                     id: syncBtn
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 30; height: 28; radius: Ui.Theme.radiusSm
-                    color: "transparent"
-                    // hover 底色独立层（透明度动画），图标不被连带淡出
-                    Rectangle {
-                        anchors.fill: parent; radius: parent.radius
-                        color: Ui.Theme.primarySoft
-                        border.width: 1; border.color: Ui.Theme.primaryBorder
-                    }
+                    width: 30; height: 30; radius: Ui.Theme.radiusSm
+                    color: Ui.Theme.well
                     HoverHandler { id: syncHover }
                     Text {
                         id: syncIcon
                         anchors.centerIn: parent
                         text: "⟳"
                         color: Bridge.scanning ? Ui.Theme.primary
-                               : syncHover.hovered ? Ui.Theme.fg : Ui.Theme.muted
+                               : syncHover.hovered ? Ui.Theme.primary
+                               : Ui.Theme.fg2
                         font.pixelSize: 15
                         font.family: Ui.Theme.fontFamily
-                        Behavior on color { ColorAnimation { duration: 150 } }
+                        Behavior on color { ColorAnimation { duration: Ui.Theme.durFast } }
                         RotationAnimation on rotation {
                             running: Bridge.scanning && root.visible
                             loops: Animation.Infinite
@@ -242,6 +240,13 @@ Window {
                     }
                 }
             }
+        }
+
+        // 顶栏/面板分隔线（展开才画；前景低透明，不实色）
+        Rectangle {
+            visible: card.expanded
+            y: 64; width: parent.width; height: 1
+            color: Ui.Theme.line
         }
 
         // 全局右键菜单（自绘）：Controls 的 Popup/Menu 在无边框 Tool 窗上
@@ -268,45 +273,52 @@ Window {
             visible: card.expanded
             clip: true
 
-            // ---- 标签栏：cc-switch 胶囊分段控件（灰胶囊 + 白色浮起激活芯片） ----
+            // ---- 标签栏：FLstyle 分段器（灰轨 + 选中段实心主色胶囊白字，
+            // 原位淡入淡出迁移，无滑动 thumb；每段带小图标）----
             Item {
                 id: tabBar
                 width: parent.width - 24
-                x: 12; height: 42
+                x: 12; height: 40
+                // 轨：白底灰页上"往中灰方向"一档（L91）
                 Rectangle {
-                    id: tabCapsule
-                    y: 5; width: parent.width; height: 32
-                    radius: 10; color: Ui.Theme.secondary
-                }
-                // 滑动白色激活芯片（芯片浮在灰胶囊上 = cc-switch segmented）
-                Rectangle {
-                    id: tabChip
-                    y: 8; height: 26; radius: 8
-                    width: tabCapsule.width / 4 - 6
-                    x: 3 + card.tab * (tabCapsule.width / 4)
-                    color: "#FFFFFF"
-                    border.width: 1; border.color: Ui.Theme.borderSoft
-                    Behavior on x {
-                        NumberAnimation {
-                            duration: 220; easing.type: Easing.Bezier
-                            easing.bezierCurve: Ui.Theme.ccEnter
-                        }
-                    }
+                    y: 4; width: parent.width; height: 32
+                    radius: 16; color: Ui.Theme.card
+                    // FLstyle 分段器范式：白色容器卡，段各自有胶囊底
                 }
                 Repeater {
+                    // 下标即 Glyphs 图标种类：0=Dot 今天 1=Grid 课表 2=Doc 作业 3=Pulse 动态
                     model: ["今天", "课表", "作业", "动态"]
                     delegate: Item {
                         x: index * (tabBar.width / 4)
-                        width: tabBar.width / 4; height: 42
-                        Text {
+                        width: tabBar.width / 4; height: 40
+                        readonly property bool sel: card.tab === index
+                        // 选中段：实心主色全圆胶囊；迁移 = 颜色原位渐变（150~250ms）
+                        Rectangle {
                             anchors.centerIn: parent
-                            anchors.verticalCenterOffset: 0
-                            text: modelData
-                            color: card.tab === index ? Ui.Theme.fg : Ui.Theme.muted
-                            font.pixelSize: 12
-                            font.weight: card.tab === index ? Font.DemiBold : Font.Normal
-                            font.family: Ui.Theme.fontFamily
-                            Behavior on color { ColorAnimation { duration: 150 } }
+                            width: parent.width - 8; height: 24
+                            radius: 12
+                            color: sel ? Ui.Theme.primary : Ui.Theme.track
+                            Behavior on color { ColorAnimation { duration: Ui.Theme.durSeg } }
+                        }
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 4
+                            Glyphs {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 10; height: 10; thickness: 2
+                                kind: index
+                                color: sel ? "#FFFFFF" : Ui.Theme.fg2
+                                Behavior on color { ColorAnimation { duration: Ui.Theme.durSeg } }
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData
+                                color: sel ? "#FFFFFF" : Ui.Theme.fg2
+                                font.pixelSize: Ui.Theme.fsBody
+                                font.weight: sel ? Font.DemiBold : Font.Normal
+                                font.family: Ui.Theme.fontFamily
+                                Behavior on color { ColorAnimation { duration: Ui.Theme.durSeg } }
+                            }
                         }
                         MouseArea {
                             anchors.fill: parent
@@ -320,11 +332,11 @@ Window {
                 }
             }
 
-            // ---- 页面容器（每页自管入场动画） ----
+            // ---- 页面容器（根级导航 = 硬切；页内入场只做透明度渐变，零位移） ----
             Item {
                 id: pages
-                y: 42; width: parent.width
-                height: parent.height - 42 - 26
+                y: 40; width: parent.width
+                height: parent.height - 40 - 26
                 clip: true
 
                 TodayPage {
@@ -356,7 +368,7 @@ Window {
                 y: parent.height - 23; x: 14; height: 18
                 verticalAlignment: Text.AlignVCenter
                 text: "上次同步 " + Bridge.lastSync
-                color: Ui.Theme.faint
+                color: Ui.Theme.fg3
                 font.pixelSize: 10; font.family: Ui.Theme.fontFamily
             }
             Text {
@@ -364,7 +376,7 @@ Window {
                 verticalAlignment: Text.AlignVCenter
                 anchors.right: parent.right; anchors.rightMargin: 14
                 text: "右键更多 · 点顶栏收起"
-                color: Ui.Theme.faint
+                color: Ui.Theme.fg3
                 font.pixelSize: 10; font.family: Ui.Theme.fontFamily
             }
         }
@@ -375,9 +387,9 @@ Window {
             visible: false
             z: 100
             width: 148; height: ctxCol.childrenRect.height + 8
-            radius: Ui.Theme.radiusSm
+            radius: Ui.Theme.radiusMd
             color: Ui.Theme.card
-            border.width: 1; border.color: Ui.Theme.border
+            border.width: 1; border.color: Ui.Theme.lineSolid
             Column {
                 id: ctxCol
                 anchors.top: parent.top; anchors.topMargin: 4
@@ -404,14 +416,14 @@ component CtxItem: Rectangle {
     signal pick()
     width: 140; height: 34
     radius: 6
-    color: ciHover.hovered ? Ui.Theme.secondary : "transparent"
+    color: ciHover.hovered ? Ui.Theme.track : "transparent"
     Behavior on color { ColorAnimation { duration: 100 } }
     HoverHandler { id: ciHover }
     Text {
         anchors.left: parent.left; anchors.leftMargin: 10
         anchors.verticalCenter: parent.verticalCenter
         text: label
-        color: Ui.Theme.fg; font.pixelSize: 12
+        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsBody
         font.family: Ui.Theme.fontFamily
     }
     MouseArea {

@@ -3,13 +3,16 @@ import QtQuick.Layouts
 import QtQuick.Controls.Basic
 import "." as Ui
 
-// 详情窗：动态/作业/考试/通知/设置 —— 与悬浮小窗同一套 cc-switch 体系
+// 详情窗：动态/作业/考试/通知/设置
+// FLstyle：窗底 = L95 页灰；内容 = 白卡浮灰页（无实线描边）；
+// 分段器 = 灰轨 + 选中段实心主色胶囊（原位迁移）；设置 = 分组列表卡范式
+// （分组标题 13px 灰在卡外上方、行间低透明分隔线、行内主文字/次文字）
 Window {
     id: root
     width: 460; height: 600
     minimumWidth: 420; minimumHeight: 520
     title: "学习通小助手 · 详情"
-    color: "#FFFFFF"
+    color: Ui.Theme.page
 
     function setTab(i) { bar.currentIndex = i }
 
@@ -39,36 +42,47 @@ Window {
                     anchors.verticalCenter: parent.verticalCenter; spacing: 1
                     Text {
                         text: "详情"
-                        color: Ui.Theme.fg; font.pixelSize: 16
+                        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsPage
                         font.weight: Font.DemiBold
                         font.family: Ui.Theme.fontFamily
                     }
                     Text {
                         text: "动态、作业、考试、通知和设置都在这"
-                        color: Ui.Theme.muted; font.pixelSize: 11
+                        color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsCap
                         font.family: Ui.Theme.fontFamily
                     }
                 }
             }
-            // 刷新按钮锚右：副标题变长也不会把它推出窗口
+            // 刷新按钮锚右：白卡胶囊浮在灰页上（中性按钮，主色只给图标）
             Rectangle {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                width: refreshTxt.width + 22; height: 30; radius: 8
-                color: Ui.Theme.secondary
-                // 作业/考试/通知三页才有刷新（考试页的考试数据、任务点各自页内刷）
-                visible: bar.currentIndex >= 1 && bar.currentIndex <= 3
-                Text {
-                    id: refreshTxt
-                    anchors.centerIn: parent; text: "⟳ 刷新"
-                    color: Ui.Theme.fg; font.pixelSize: 12
-                    font.weight: Font.Medium
-                    font.family: Ui.Theme.fontFamily
+                width: refreshGlyph.width + refreshTxt.width + 22; height: 30; radius: 15
+                color: Ui.Theme.card
+                // 作业/考试/通知三页页内刷；动态页走全局巡检（同一按钮
+                // 保持头部一致，别让"动态页右上角缺一块"）
+                visible: bar.currentIndex >= 0 && bar.currentIndex <= 3
+                Row {
+                    anchors.centerIn: parent; spacing: 5
+                    Text {
+                        id: refreshGlyph
+                        text: "⟳"
+                        color: Ui.Theme.primary; font.pixelSize: 12
+                        font.family: Ui.Theme.fontFamily
+                    }
+                    Text {
+                        id: refreshTxt
+                        text: "刷新"
+                        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsBody
+                        font.weight: Font.Medium
+                        font.family: Ui.Theme.fontFamily
+                    }
                 }
                 MouseArea {
                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (bar.currentIndex === 1) DBridge.refreshHw()
+                        if (bar.currentIndex === 0) Bridge.action("scan_now")
+                        else if (bar.currentIndex === 1) DBridge.refreshHw()
                         else if (bar.currentIndex === 2) DBridge.refreshExtra("exams_progress")
                         else if (bar.currentIndex === 3) DBridge.refreshExtra("notices")
                     }
@@ -76,39 +90,47 @@ Window {
             }
         }
 
-        // 胶囊分段标签（同小窗）
+        // 分段标签（同小窗）：灰轨 + 选中段实心主色 + 每段小图标
         Rectangle {
             id: bar
             property int currentIndex: 0
-            width: parent.width; height: 34; radius: 10
-            color: Ui.Theme.secondary
-            Rectangle {
-                id: chip
-                y: 3; height: 28; radius: 8
-                width: bar.width / 5 - 6
-                x: 3 + bar.currentIndex * (bar.width / 5)
-                color: "#FFFFFF"
-                border.width: 1; border.color: Ui.Theme.borderSoft
-                Behavior on x {
-                    NumberAnimation {
-                        duration: 220; easing.type: Easing.Bezier
-                        easing.bezierCurve: Ui.Theme.ccEnter
-                    }
-                }
-            }
+            width: parent.width; height: 36; radius: 18
+            color: Ui.Theme.card   // 白容器分段器（与主窗一致）
+            // 下标 ≠ 图标种类：这里显式配对 [kind, label]
+            // kinds: 2=Doc 3=Pulse 4=Clock 8=List(通知,别用 Bell——与表盘同形) 6=Sliders
+            readonly property var items: [[3, "动态"], [2, "作业"], [4, "考试"], [8, "通知"], [6, "设置"]]
             Row {
                 anchors.fill: parent
                 Repeater {
-                    model: ["动态", "作业", "考试", "通知", "设置"]
+                    model: bar.items
                     delegate: Item {
                         width: bar.width / 5; height: bar.height
-                        Text {
-                            anchors.centerIn: parent; text: modelData
-                            color: bar.currentIndex === index ? Ui.Theme.fg : Ui.Theme.muted
-                            font.pixelSize: 12
-                            font.weight: bar.currentIndex === index ? Font.DemiBold : Font.Normal
-                            font.family: Ui.Theme.fontFamily
-                            Behavior on color { ColorAnimation { duration: 150 } }
+                        readonly property bool sel: bar.currentIndex === index
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: parent.width - 8; height: 26; radius: 13
+                            color: sel ? Ui.Theme.primary : Ui.Theme.track
+                            Behavior on color { ColorAnimation { duration: Ui.Theme.durSeg } }
+                        }
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 4
+                            Glyphs {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 10; height: 10; thickness: 2
+                                kind: modelData[0]
+                                color: sel ? "#FFFFFF" : Ui.Theme.fg2
+                                Behavior on color { ColorAnimation { duration: Ui.Theme.durSeg } }
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData[1]
+                                color: sel ? "#FFFFFF" : Ui.Theme.fg2
+                                font.pixelSize: Ui.Theme.fsBody
+                                font.weight: sel ? Font.DemiBold : Font.Normal
+                                font.family: Ui.Theme.fontFamily
+                                Behavior on color { ColorAnimation { duration: Ui.Theme.durSeg } }
+                            }
                         }
                         MouseArea {
                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -120,19 +142,19 @@ Window {
         }
     }
 
-    // ===== 保存提示条 =====
+    // ===== 保存提示条（主色淡底胶囊）=====
     Rectangle {
         id: toast
         z: 10   // 盖在页面区上（StackLayout 声明在后，不提层会被白卡压住）
         visible: toastTxt.text !== ""
         anchors.top: head.bottom; anchors.topMargin: 8
         anchors.left: head.left; anchors.right: head.right
-        height: 30; radius: 8
+        height: 30; radius: 15
         color: Ui.Theme.primarySoft
         Text {
             id: toastTxt
             anchors.centerIn: parent
-            color: Ui.Theme.primary; font.pixelSize: 11
+            color: Ui.Theme.primary; font.pixelSize: Ui.Theme.fsCap
             font.family: Ui.Theme.fontFamily
         }
         Timer {
@@ -168,19 +190,17 @@ Window {
                         readonly property bool hasDetail:
                             (modelData.detail || "") !== ""
                         height: hasDetail ? 64 : 52
-                        radius: Ui.Theme.radiusMd
+                        radius: Ui.Theme.radiusLg
                         color: "#FFFFFF"
-                        border.width: 1; border.color: Ui.Theme.border
-                        // 左：课程色块
+                        // 左：课程色块（课程身份色）
                         Rectangle {
                             x: 10; anchors.verticalCenter: parent.verticalCenter
                             width: 36; height: 36; radius: 10
-                            color: modelData.cbg || Ui.Theme.secondary
-                            border.width: 1; border.color: Ui.Theme.border
+                            color: modelData.cbg || Ui.Theme.track
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData.course.length > 0 ? modelData.course[0] : "?"
-                                color: modelData.cfg || Ui.Theme.muted
+                                color: modelData.cfg || Ui.Theme.fg2
                                 font.pixelSize: 15; font.bold: true
                                 font.family: Ui.Theme.fontFamily
                             }
@@ -194,14 +214,14 @@ Window {
                             Text {
                                 width: parent.width
                                 text: modelData.course
-                                color: Ui.Theme.muted; font.pixelSize: 10
+                                color: Ui.Theme.fg2; font.pixelSize: 10
                                 font.family: Ui.Theme.fontFamily
                                 elide: Text.ElideRight
                             }
                             Text {
                                 width: parent.width
                                 text: modelData.title
-                                color: Ui.Theme.fg; font.pixelSize: 12
+                                color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsBody
                                 font.family: Ui.Theme.fontFamily
                                 elide: Text.ElideRight
                             }
@@ -224,32 +244,53 @@ Window {
                             Rectangle {
                                 width: tlTag.width + 12; height: 18; radius: 9
                                 color: modelData.priority === "high" ? Ui.Theme.dangerSoft
-                                       : Ui.Theme.secondary
+                                       : Ui.Theme.track
                                 Text {
                                     id: tlTag
                                     anchors.centerIn: parent; text: modelData.tag
-                                    color: modelData.priority === "high" ? Ui.Theme.danger : Ui.Theme.muted
+                                    color: modelData.priority === "high" ? Ui.Theme.danger : Ui.Theme.fg2
                                     font.pixelSize: 10; font.weight: Font.Medium
                                     font.family: Ui.Theme.fontFamily
                                 }
                             }
                             Text {
                                 text: modelData.time
-                                color: Ui.Theme.faint; font.pixelSize: 9
+                                color: Ui.Theme.fg3; font.pixelSize: 9
                                 font.family: Ui.Theme.fontFamily
                             }
                         }
                     }
                 }
+                // 空态（图标井 + 粗标题 + 副文）
                 Rectangle {
                     visible: DBridge.timeline.length === 0
-                    width: parent.width; height: 90; radius: Ui.Theme.radiusMd
-                    color: "#FFFFFF"; border.width: 1; border.color: Ui.Theme.border
-                    Text {
-                        anchors.centerIn: parent
-                        text: "还没有动态，检查到新作业/资料/通知会出现在这里"
-                        color: Ui.Theme.muted; font.pixelSize: 12
-                        font.family: Ui.Theme.fontFamily
+                    width: parent.width; height: 96; radius: Ui.Theme.radiusLg
+                    color: "#FFFFFF"
+                    Column {
+                        anchors.centerIn: parent; spacing: 6
+                        Item {
+                            width: 32; height: 32
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            Rectangle { anchors.fill: parent; radius: 16; color: Ui.Theme.primarySoft }
+                            Glyphs {
+                                anchors.centerIn: parent
+                                width: 14; height: 14; thickness: 2.4
+                                kind: 3   // Pulse
+                                color: Ui.Theme.primary
+                            }
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: "还没有动态"
+                            color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.DemiBold
+                            font.family: Ui.Theme.fontFamily
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: "检查到新作业/资料/通知会出现在这里"
+                            color: Ui.Theme.fg3; font.pixelSize: Ui.Theme.fsCap
+                            font.family: Ui.Theme.fontFamily
+                        }
                     }
                 }
             }
@@ -266,26 +307,46 @@ Window {
                 width: parent.width; spacing: 8
                 Rectangle {
                     visible: DBridge.hwFailed
-                    width: parent.width; height: 56; radius: Ui.Theme.radiusMd
+                    width: parent.width; height: 56; radius: Ui.Theme.radiusLg
                     color: Ui.Theme.dangerSoft
                     Text {
                         anchors.centerIn: parent
                         text: "作业获取失败，点右上「⟳ 刷新」重试"
-                        color: Ui.Theme.danger; font.pixelSize: 12
+                        color: Ui.Theme.danger; font.pixelSize: Ui.Theme.fsBody
                         font.family: Ui.Theme.fontFamily
                     }
                 }
+                // 空态：成功语义（图标井 + 粗标题 + 副文）
                 Rectangle {
                     visible: !DBridge.hwFailed && DBridge.hw.length === 0
                              && DBridge.hwIgnored === 0
-                    width: parent.width; height: 90; radius: Ui.Theme.radiusMd
-                    color: "#FFFFFF"; border.width: 1; border.color: Ui.Theme.border
-                    Text {
-                        anchors.centerIn: parent
-                        text: "没有待交的作业 ✓"
-                        color: Ui.Theme.ok; font.pixelSize: 13
-                        font.weight: Font.Medium
-                        font.family: Ui.Theme.fontFamily
+                    width: parent.width; height: 96; radius: Ui.Theme.radiusLg
+                    color: "#FFFFFF"
+                    Column {
+                        anchors.centerIn: parent; spacing: 6
+                        Item {
+                            width: 32; height: 32
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            Rectangle { anchors.fill: parent; radius: 16; color: Ui.Theme.okSoft }
+                            Glyphs {
+                                anchors.centerIn: parent
+                                width: 14; height: 14; thickness: 2.4
+                                kind: 7   // Check
+                                color: Ui.Theme.ok
+                            }
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: "没有待交的作业"
+                            color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.DemiBold
+                            font.family: Ui.Theme.fontFamily
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: "都交完了，真省心"
+                            color: Ui.Theme.fg3; font.pixelSize: Ui.Theme.fsCap
+                            font.family: Ui.Theme.fontFamily
+                        }
                     }
                 }
                 Repeater {
@@ -293,11 +354,23 @@ Window {
                     delegate: Rectangle {
                         id: hwCard
                         width: hwCol.width; height: 64
-                        radius: Ui.Theme.radiusMd
+                        radius: Ui.Theme.radiusLg
                         color: "#FFFFFF"
-                        border.width: 1; border.color: Ui.Theme.border
                         opacity: (modelData.urgency === "expired"
                                   || modelData.urgency === "unknown") ? 0.62 : 1
+                        readonly property color urgencyColor:
+                            modelData.urgency === "high" ? Ui.Theme.danger
+                            : modelData.urgency === "mid" ? Ui.Theme.warn
+                            : modelData.urgency === "expired" ? Ui.Theme.fg3
+                            : Ui.Theme.primary
+                        // 左缘紧迫度竖条
+                        Rectangle {
+                            x: 0; width: 3
+                            anchors.top: parent.top; anchors.topMargin: 14
+                            anchors.bottom: parent.bottom; anchors.bottomMargin: 14
+                            radius: 1.5
+                            color: hwCard.urgencyColor
+                        }
                         HoverHandler { id: hwCardHover }
                         // 悬停操作钮：去交（开学习通）/ ✕（从看板隐藏）——
                         // 摸得着的动作比藏右键里直白
@@ -327,10 +400,10 @@ Window {
                             Rectangle {
                                 visible: hwCardHover.hovered
                                 width: 18; height: 18; radius: 9
-                                color: Ui.Theme.secondary
+                                color: Ui.Theme.track
                                 Text {
                                     anchors.centerIn: parent; text: "✕"
-                                    color: Ui.Theme.muted
+                                    color: Ui.Theme.fg2
                                     font.pixelSize: 9
                                     font.family: Ui.Theme.fontFamily
                                 }
@@ -346,12 +419,11 @@ Window {
                         Rectangle {
                             x: 10; anchors.verticalCenter: parent.verticalCenter
                             width: 36; height: 36; radius: 10
-                            color: modelData.cbg || Ui.Theme.secondary
-                            border.width: 1; border.color: Ui.Theme.border
+                            color: modelData.cbg || Ui.Theme.track
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData.course.length > 0 ? modelData.course[0] : "?"
-                                color: modelData.cfg || Ui.Theme.muted
+                                color: modelData.cfg || Ui.Theme.fg2
                                 font.pixelSize: 15; font.bold: true
                                 font.family: Ui.Theme.fontFamily
                             }
@@ -364,14 +436,14 @@ Window {
                             Text {
                                 width: parent.width
                                 text: modelData.course
-                                color: Ui.Theme.faint; font.pixelSize: 10
+                                color: Ui.Theme.fg3; font.pixelSize: 10
                                 font.family: Ui.Theme.fontFamily
                                 elide: Text.ElideRight
                             }
                             Text {
                                 width: parent.width
                                 text: modelData.title
-                                color: Ui.Theme.fg; font.pixelSize: 12
+                                color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsBody
                                 font.weight: Font.Medium
                                 font.family: Ui.Theme.fontFamily
                                 elide: Text.ElideRight
@@ -386,30 +458,30 @@ Window {
                             spacing: 3
                             Text {
                                 text: modelData.deadlineLabel
-                                color: Ui.Theme.muted; font.pixelSize: 11
+                                color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsSub
                                 font.family: Ui.Theme.fontFamily
                             }
                             Text {
                                 text: modelData.remainText
                                 color: modelData.urgency === "high" ? Ui.Theme.danger
                                        : modelData.urgency === "mid" ? Ui.Theme.warn
-                                       : Ui.Theme.muted
-                                font.pixelSize: 11; font.weight: Font.Medium
+                                       : Ui.Theme.fg2
+                                font.pixelSize: Ui.Theme.fsSub; font.weight: Font.Medium
                                 font.family: Ui.Theme.fontFamily
                             }
                         }
                     }
                 }
-                // 忽略恢复条（有隐藏才出现；沉底，别挡新作业）
+                // 忽略恢复条（有隐藏才出现；沉底，别挡新作业；轨色信息条）
                 Rectangle {
                     visible: DBridge.hwIgnored > 0
-                    width: parent.width; height: 34; radius: Ui.Theme.radiusMd
-                    color: Ui.Theme.cardAlt
+                    width: parent.width; height: 34; radius: Ui.Theme.radiusSm
+                    color: Ui.Theme.track
                     Text {
                         anchors.centerIn: parent
                         text: "已隐藏 " + DBridge.hwIgnored
                               + " 条作业（不打算交的）· 点击全部恢复"
-                        color: Ui.Theme.muted; font.pixelSize: 10
+                        color: Ui.Theme.fg2; font.pixelSize: 10
                         font.family: Ui.Theme.fontFamily
                     }
                     MouseArea {
@@ -435,10 +507,10 @@ Window {
             Flickable {
                 id: setFlick
                 anchors.top: parent.top; anchors.bottom: saveBtn.top
-                anchors.bottomMargin: 10
+                anchors.bottomMargin: 14
                 anchors.left: parent.left; anchors.right: parent.right
                 contentWidth: width
-                contentHeight: setCol.height + 8
+                contentHeight: setCol.height + 20
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
 
@@ -469,41 +541,48 @@ Window {
 
             Column {
                 id: setCol
-                width: parent.width; spacing: 10
+                width: parent.width; spacing: 8
+
+                // 分组标题在卡外上方（FLstyle 分组列表范式）
+                Item {
+                    width: parent.width; height: 22
+                    Text {
+                        anchors.left: parent.left; anchors.bottom: parent.bottom
+                        text: "常规"
+                        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.DemiBold
+                        font.family: Ui.Theme.fontFamily
+                    }
+                }
 
                 // 常规
                 Rectangle {
-                    width: parent.width; radius: Ui.Theme.radiusMd
-                    color: "#FFFFFF"; border.width: 1; border.color: Ui.Theme.border
-                    height: genCol.height + 24
+                    width: parent.width; radius: Ui.Theme.radiusLg
+                    color: "#FFFFFF"
+                    height: genCol.height + 16
                     Column {
                         id: genCol
-                        x: 14; y: 12; width: parent.width - 28; spacing: 10
-                        Text {
-                            text: "常规"
-                            color: Ui.Theme.fg; font.pixelSize: 13
-                            font.weight: Font.DemiBold
-                            font.family: Ui.Theme.fontFamily
-                        }
+                        x: 14; y: 8; width: parent.width - 28; spacing: 0
+
                         Row {
-                            spacing: 8
+                            width: parent.width; height: 44
                             Item {
-                                width: 96; height: 36
+                                width: 96; height: parent.height
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: "巡检间隔"; color: Ui.Theme.muted
-                                    font.pixelSize: 12; font.family: Ui.Theme.fontFamily
+                                    text: "巡检间隔"; color: Ui.Theme.fg
+                                    font.pixelSize: Ui.Theme.fsBody; font.family: Ui.Theme.fontFamily
                                 }
                             }
+                            // 步进器 = 输入轨（白卡上变暗一档），按钮 hover 井色
                             Rectangle {
-                                width: 130; height: 34; radius: 8
-                                color: Ui.Theme.secondary
-                                border.width: 1; border.color: Ui.Theme.border
+                                width: 130; height: 32; radius: Ui.Theme.radiusSm
+                                color: Ui.Theme.track
+                                anchors.verticalCenter: parent.verticalCenter
                                 Row {
                                     anchors.centerIn: parent; spacing: 10
                                     Rectangle {
-                                        width: 24; height: 24; radius: 6
-                                        color: minusHover.hovered ? "#E4E4E7" : "transparent"
+                                        width: 24; height: 24; radius: Ui.Theme.radiusSm - 2
+                                        color: minusHover.hovered ? Ui.Theme.well : "transparent"
                                         HoverHandler { id: minusHover }
                                         Text {
                                             anchors.centerIn: parent; text: "−"
@@ -518,12 +597,13 @@ Window {
                                     Text {
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: setFlick.interval + " 分钟"
-                                        color: Ui.Theme.fg; font.pixelSize: 12
+                                        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsBody
                                         font.family: Ui.Theme.fontFamily
+                                        font.features: { "tnum": 1 }
                                     }
                                     Rectangle {
-                                        width: 24; height: 24; radius: 6
-                                        color: plusHover.hovered ? "#E4E4E7" : "transparent"
+                                        width: 24; height: 24; radius: Ui.Theme.radiusSm - 2
+                                        color: plusHover.hovered ? Ui.Theme.well : "transparent"
                                         HoverHandler { id: plusHover }
                                         Text {
                                             anchors.centerIn: parent; text: "+"
@@ -538,6 +618,7 @@ Window {
                                 }
                             }
                         }
+                        SetSep {}
                         SetRow {
                             label: "免打扰时段"
                             Field {
@@ -545,6 +626,7 @@ Window {
                                 onTextChanged: setFlick.dnd = text
                             }
                         }
+                        SetSep {}
                         SetRow {
                             label: "桌面弹窗"
                             SetSwitch {
@@ -552,6 +634,7 @@ Window {
                                 onToggled: setFlick.toastOn = checked
                             }
                         }
+                        SetSep {}
                         SetRow {
                             label: "开机自启"
                             SetSwitch {
@@ -559,26 +642,28 @@ Window {
                                 onToggled: setFlick.autostart = checked
                             }
                         }
+                        SetSep {}
                         SetRow {
                             label: "快捷键"
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: "Alt+Shift+C 唤起/隐藏小窗"
-                                color: Ui.Theme.muted; font.pixelSize: 11
+                                color: Ui.Theme.fg3; font.pixelSize: Ui.Theme.fsCap
                                 font.family: Ui.Theme.fontFamily
                             }
                         }
+                        SetSep {}
                         SetRow {
                             label: "课表到手机"
+                            // 白卡上的次级按钮 = 轨色胶囊
                             Rectangle {
-                                width: icsTxt.width + 20; height: 30; radius: 8
-                                color: Ui.Theme.secondary
-                                border.width: 1; border.color: Ui.Theme.border
+                                width: icsTxt.width + 22; height: 28; radius: 14
+                                color: Ui.Theme.track
                                 Text {
                                     id: icsTxt
                                     anchors.centerIn: parent
                                     text: "导出日历 (.ics)"
-                                    color: Ui.Theme.fg; font.pixelSize: 11
+                                    color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsCap
                                     font.family: Ui.Theme.fontFamily
                                 }
                                 MouseArea {
@@ -591,20 +676,25 @@ Window {
                     }
                 }
 
+                // 分组标题在卡外上方（与上一卡间隔 = 列隙 8 + 标题行高）
+                Item {
+                    width: parent.width; height: 30
+                    Text {
+                        anchors.left: parent.left; anchors.bottom: parent.bottom
+                        text: "邮件提醒"
+                        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.DemiBold
+                        font.family: Ui.Theme.fontFamily
+                    }
+                }
+
                 // 邮件提醒
                 Rectangle {
-                    width: parent.width; radius: Ui.Theme.radiusMd
-                    color: "#FFFFFF"; border.width: 1; border.color: Ui.Theme.border
-                    height: mailCol.height + 24
+                    width: parent.width; radius: Ui.Theme.radiusLg
+                    color: "#FFFFFF"
+                    height: mailCol.height + 16
                     Column {
                         id: mailCol
-                        x: 14; y: 12; width: parent.width - 28; spacing: 10
-                        Text {
-                            text: "邮件提醒"
-                            color: Ui.Theme.fg; font.pixelSize: 13
-                            font.weight: Font.DemiBold
-                            font.family: Ui.Theme.fontFamily
-                        }
+                        x: 14; y: 8; width: parent.width - 28; spacing: 0
                         SetRow {
                             label: "重要事项发邮件"
                             SetSwitch {
@@ -612,6 +702,7 @@ Window {
                                 onToggled: setFlick.emailOn = checked
                             }
                         }
+                        SetSep {}
                         SetRow {
                             label: "收件邮箱"
                             Field {
@@ -620,6 +711,7 @@ Window {
                                 onTextChanged: setFlick.emailTo = text
                             }
                         }
+                        SetSep {}
                         SetRow {
                             label: "SMTP 服务器"
                             Field {
@@ -628,6 +720,7 @@ Window {
                                 onTextChanged: setFlick.smtpHost = text
                             }
                         }
+                        SetSep {}
                         SetRow {
                             label: "发件账号"
                             Field {
@@ -635,6 +728,7 @@ Window {
                                 onTextChanged: setFlick.smtpUser = text
                             }
                         }
+                        SetSep {}
                         SetRow {
                             label: "授权码"
                             Field {
@@ -650,18 +744,18 @@ Window {
 
             }   // Flickable setFlick 到此关闭（saveBtn 必须是它的兄弟）
 
-            // 常驻保存按钮：不跟滚动，永远可见
+            // 常驻保存按钮：一屏唯一主动作 = 实心主色胶囊，不跟滚动
             Rectangle {
                 id: saveBtn
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left; anchors.right: parent.right
-                height: 44; radius: Ui.Theme.radiusMd
+                height: 44; radius: 22
                 color: saveHover.hovered ? Ui.Theme.primaryDeep : Ui.Theme.primary
                 Behavior on color { ColorAnimation { duration: 120 } }
                 HoverHandler { id: saveHover }
                 Text {
                     anchors.centerIn: parent; text: "保存设置"
-                    color: "#FFFFFF"; font.pixelSize: 13; font.weight: Font.DemiBold
+                    color: "#FFFFFF"; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.DemiBold
                     font.family: Ui.Theme.fontFamily
                 }
                 MouseArea {
@@ -683,50 +777,59 @@ Window {
         }
 
     // ===== 内联组件 =====
+    // 行内分隔线：前景低透明，永不实色
+    component SetSep: Rectangle {
+        x: 16; width: parent.width - 32; height: 1   // 两侧内缩，不触卡边
+        color: Ui.Theme.line
+    }
+
     component SetRow: Row {
         property string label
         default property alias _slot: slot.data
         spacing: 8
         Item {
-            width: 96; height: 36
+            width: 96; height: 44
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: parent.parent.label
-                color: Ui.Theme.muted; font.pixelSize: 12
+                color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsBody
                 font.family: Ui.Theme.fontFamily
             }
         }
-        Item { id: slot; width: childrenRect.width; height: 36 }
+        Item { id: slot; width: childrenRect.width; height: 44 }
     }
 
     component Field: TextField {
+        id: field
         property string placeholder
         placeholderText: placeholder
-        color: Ui.Theme.fg; font.pixelSize: 12
+        placeholderTextColor: Ui.Theme.fg3   // 占位符比已填值再淡一档，别同灰
+        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsBody
         font.family: Ui.Theme.fontFamily
         selectByMouse: true
         implicitHeight: 34
+        leftPadding: 10; rightPadding: 10
         background: Rectangle {
-            radius: 8; color: Ui.Theme.secondary
-            border.width: 1; border.color: Ui.Theme.border
+            // 输入 = 轨（白卡上变暗一档）；聚焦 = 实心主色描边（border 不吃透明色）
+            radius: 17; color: Ui.Theme.track   // 胶囊输入（高 34 的一半）
+            border.width: field.activeFocus ? 2 : 0
+            border.color: Ui.Theme.primary
+            Behavior on border.width { NumberAnimation { duration: Ui.Theme.durFast } }
         }
     }
 
-    // Basic 风格 Switch 的选中轨道默认近黑，跟主色蓝脱节——
-    // 激活态统一走主题色
+    // FLstyle 开关：ON 轨=主色白滑块；OFF 轨=灰轨（迁移只做颜色渐变）
     component SetSwitch: Switch {
         id: sw
         indicator: Rectangle {
-            implicitWidth: 38; implicitHeight: 22; radius: 11
-            color: sw.checked ? Ui.Theme.primary : Ui.Theme.secondary
-            border.width: 1
-            border.color: sw.checked ? Ui.Theme.primaryBorder : Ui.Theme.border
+            implicitWidth: 48; implicitHeight: 28; radius: 14
+            color: sw.checked ? Ui.Theme.primary : Ui.Theme.track
             Behavior on color { ColorAnimation { duration: 120 } }
             Rectangle {
-                width: 16; height: 16; radius: 8
+                width: 22; height: 22; radius: 11
                 y: (parent.height - height) / 2
                 x: sw.checked ? parent.width - width - 3 : 3
-                color: "#FFFFFF"
+                color: sw.checked ? "#FFFFFF" : Ui.Theme.fg3   // OFF 灰旋钮
                 Behavior on x { NumberAnimation { duration: 120 } }
             }
         }

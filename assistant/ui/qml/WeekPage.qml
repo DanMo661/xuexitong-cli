@@ -1,10 +1,10 @@
 import QtQuick
 import "." as Ui
 
-// 课表页：微信小程序课表范式（参考图）
-// 节次时间轨（起止双时刻+当前节胶囊）+ 星期/日期双行表头 + 满铺淡彩课程块。
+// 课表页：节次时间轨（起止双时刻+当前节胶囊）+ 星期/日期双行表头 + 满铺淡彩课程块。
 // 整学期恒 11 节次轨（晚间没课也留行），行高自适应高度 → 单页放得下，
 // 永不出现纵向滚动；按住鼠标左/右拖动 = 翻上/下一周。
+// FLstyle：页面 = 灰底；当前节胶囊/今天列 = 主色文字级状态；课程块色 = 课程身份色（数据驱动）
 Item {
     id: page
     property int weekOffset: 0     // 本地导航状态；数据由 app 按 offset 重算塞进 Bridge.grid
@@ -19,15 +19,12 @@ Item {
         }
     }
 
-    onVisibleChanged: if (visible) enter.restart()
+    onVisibleChanged: if (visible) fade.restart()
 
-    ParallelAnimation {
-        id: enter
-        NumberAnimation { target: page; property: "opacity"; from: 0; to: 1; duration: 160 }
-        NumberAnimation {
-            target: page; property: "x"; from: 10; to: 0; duration: 220
-            easing.type: Easing.Bezier; easing.bezierCurve: Ui.Theme.ccEnter
-        }
+    // 内容入场：只做透明度渐变（零位移）
+    NumberAnimation {
+        id: fade
+        target: page; property: "opacity"; from: 0; to: 1; duration: Ui.Theme.durFade
     }
 
     // 几何常量：7 列恒显 + 左侧时间轨
@@ -40,9 +37,9 @@ Item {
                                   ? Math.max(20, (height - gridTop - 8) / nodeCount)
                                   : 30
 
-    // ---- 周次导航（浮在顶部） ----
+    // ---- 周次导航（浮在顶部，坐在页灰上）----
     Rectangle {
-        y: 0; width: parent.width; height: 40; color: Ui.Theme.card
+        y: 0; width: parent.width; height: 40; color: "transparent"
         Row {
             anchors.left: parent.left; anchors.leftMargin: 12
             anchors.verticalCenter: parent.verticalCenter
@@ -52,13 +49,13 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 26; height: 26; radius: 13
                 color: !enabled ? "transparent"
-                       : prevHover.hovered ? Ui.Theme.secondary : "transparent"
+                       : prevHover.hovered ? Ui.Theme.track : "transparent"
                 enabled: (Bridge.grid.week || 1) > 1
                 opacity: enabled ? 1 : 0.35
                 HoverHandler { id: prevHover }
                 Text {
                     anchors.centerIn: parent; text: "‹"
-                    color: Ui.Theme.muted; font.pixelSize: 15
+                    color: Ui.Theme.fg2; font.pixelSize: 15
                     font.family: Ui.Theme.fontFamily
                 }
                 MouseArea {
@@ -73,7 +70,7 @@ Item {
                       ? "第 " + Bridge.grid.week + " 教学周"
                         + (Bridge.grid.rangeLabel ? " · " + Bridge.grid.rangeLabel : "")
                       : "学期未同步"
-                color: Ui.Theme.fg; font.pixelSize: 12
+                color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsBody
                 font.weight: Font.DemiBold
                 font.family: Ui.Theme.fontFamily
             }
@@ -82,14 +79,14 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 26; height: 26; radius: 13
                 color: !enabled ? "transparent"
-                       : nextHover.hovered ? Ui.Theme.secondary : "transparent"
+                       : nextHover.hovered ? Ui.Theme.track : "transparent"
                 enabled: !Bridge.grid.maxWeek
                          || (Bridge.grid.week || 1) < Bridge.grid.maxWeek
                 opacity: enabled ? 1 : 0.35
                 HoverHandler { id: nextHover }
                 Text {
                     anchors.centerIn: parent; text: "›"
-                    color: Ui.Theme.muted; font.pixelSize: 15
+                    color: Ui.Theme.fg2; font.pixelSize: 15
                     font.family: Ui.Theme.fontFamily
                 }
                 MouseArea {
@@ -98,6 +95,7 @@ Item {
                 }
             }
 
+            // 回本周 = 白卡胶囊浮在灰页上（中性药丸，主色只给文字）
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 // 假期（curWeek>maxWeek）/未开学时"回本周"无意义且会
@@ -108,11 +106,11 @@ Item {
                          && (!Bridge.grid.maxWeek
                              || Bridge.grid.curWeek <= Bridge.grid.maxWeek)
                 width: backTxt.width + 16; height: 22; radius: 11
-                color: Ui.Theme.primarySoft
+                color: Ui.Theme.card
                 Text {
                     id: backTxt
                     anchors.centerIn: parent; text: "回本周"
-                    color: Ui.Theme.primary; font.pixelSize: 10
+                    color: Ui.Theme.primary; font.pixelSize: Ui.Theme.fsCap
                     font.family: Ui.Theme.fontFamily
                 }
                 MouseArea {
@@ -125,11 +123,15 @@ Item {
             anchors.right: parent.right; anchors.rightMargin: 14
             anchors.verticalCenter: parent.verticalCenter
             text: Bridge.grid.maxWeek ? "/ 共 " + Bridge.grid.maxWeek + " 周" : ""
-            color: Ui.Theme.faint; font.pixelSize: 10
+            color: Ui.Theme.fg3; font.pixelSize: Ui.Theme.fsCap
             font.family: Ui.Theme.fontFamily
         }
-        Rectangle { y: 39; width: parent.width; height: 1; color: Ui.Theme.borderSoft }
     }
+
+    // 导航行下沿分隔线：前景低透明，不实色。
+    // 放页级、y 取偶数逻辑像素——150%DPI 下 y=39(→58.5 设备px)的 1px 线
+    // 会被光栅化吃掉（实测渲染为 0 行），偶数 y 落在整数设备像素上才稳
+    Rectangle { y: 40; width: parent.width; height: 1; color: Ui.Theme.line }
 
     // ---- 表头：角标 + 星期/日期双行（今天列文字变主题色），随拖动一起平移 ----
     Row {
@@ -148,7 +150,7 @@ Item {
                     y: 2
                     text: (Bridge.grid.dayLabels || [])[index] || ""
                     color: today ? Ui.Theme.primary : Ui.Theme.fg
-                    font.pixelSize: 12
+                    font.pixelSize: Ui.Theme.fsBody
                     font.weight: today ? Font.DemiBold : Font.Medium
                     font.family: Ui.Theme.fontFamily
                 }
@@ -156,7 +158,7 @@ Item {
                     anchors.horizontalCenter: parent.horizontalCenter
                     y: 17
                     text: (Bridge.grid.dayDates || [])[index] || ""
-                    color: today ? Ui.Theme.primary : Ui.Theme.faint
+                    color: today ? Ui.Theme.primary : Ui.Theme.fg3
                     font.pixelSize: 9
                     font.family: Ui.Theme.fontFamily
                 }
@@ -164,7 +166,7 @@ Item {
         }
     }
 
-    // ---- 网格主体：时间轨 + 课程块画布（单页，无滚动） ----
+    // ---- 网格主体：时间轨 + 课程块画布（单页，无滚动）----
     Item {
         id: gridBody
         x: 12; y: 70
@@ -179,7 +181,7 @@ Item {
             height: page.nodeCount * page.rowH
 
             // 时间轨：每节上沿=开始、下沿=结束（真课表的排法）；
-            // 当前节整行胶囊高亮
+            // 当前节整行胶囊 = 主色淡底（状态色允许上小胶囊）
             Repeater {
                 model: page.nodeCount
                 delegate: Item {
@@ -197,18 +199,20 @@ Item {
                         anchors.top: parent.top; anchors.topMargin: 0
                         anchors.right: parent.right; anchors.rightMargin: 2
                         text: (Bridge.grid.nodeTimes || [])[index] || ""
-                        color: parent.isNow ? Ui.Theme.primary : Ui.Theme.muted
+                        color: parent.isNow ? Ui.Theme.primary : Ui.Theme.fg2
                         font.pixelSize: 8
                         font.weight: parent.isNow ? Font.DemiBold : Font.Medium
                         font.family: Ui.Theme.fontFamily
+                        font.features: { "tnum": 1 }
                     }
                     Text {
                         anchors.bottom: parent.bottom; anchors.bottomMargin: 0
                         anchors.right: parent.right; anchors.rightMargin: 2
                         text: (Bridge.grid.nodeTimesEnd || [])[index] || ""
-                        color: parent.isNow ? Ui.Theme.primary : Ui.Theme.faint
+                        color: parent.isNow ? Ui.Theme.primary : Ui.Theme.fg3
                         font.pixelSize: 8
                         font.family: Ui.Theme.fontFamily
+                        font.features: { "tnum": 1 }
                     }
                 }
             }
@@ -223,7 +227,7 @@ Item {
                     y: (modelData.node - 1) * page.rowH + 1.5
                     width: page.colW - 3
                     height: modelData.len * page.rowH - 3
-                    radius: 5
+                    radius: 8   // FLstyle chip 圆角
                     color: modelData.bg
                     clip: true   // 文字极端情况下宁可裁切也不许溢出色块
                     // 课名超 12 字缩一号；行数上限按块高算，多出的省略号
@@ -292,7 +296,7 @@ Item {
                 visible: (Bridge.grid.blocks || []).length === 0
                 anchors.centerIn: parent
                 text: Bridge.grid.empty ? "课表还没同步好" : "这一周没有课"
-                color: Ui.Theme.faint; font.pixelSize: 12
+                color: Ui.Theme.fg3; font.pixelSize: Ui.Theme.fsBody
                 font.family: Ui.Theme.fontFamily
             }
         }

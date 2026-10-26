@@ -3,18 +3,16 @@ import QtQuick.Controls.Basic
 import "." as Ui
 
 // 动态页：巡检事件时间线（新资料/作业/通知/提醒）
+// FLstyle：白卡浮灰页无描边；类型药丸 = 淡彩底+深彩字（状态色只上 chip）
 Item {
     id: page
 
-    onVisibleChanged: if (visible) enter.restart()
+    onVisibleChanged: if (visible) fade.restart()
 
-    ParallelAnimation {
-        id: enter
-        NumberAnimation { target: page; property: "opacity"; from: 0; to: 1; duration: 160 }
-        NumberAnimation {
-            target: page; property: "x"; from: 10; to: 0; duration: 220
-            easing.type: Easing.Bezier; easing.bezierCurve: Ui.Theme.ccEnter
-        }
+    // 内容入场：只做透明度渐变（零位移）
+    NumberAnimation {
+        id: fade
+        target: page; property: "opacity"; from: 0; to: 1; duration: Ui.Theme.durFade
     }
 
     Flickable {
@@ -27,7 +25,7 @@ Item {
             policy: ScrollBar.AsNeeded
             implicitWidth: 4
             contentItem: Rectangle {
-                radius: 2; color: Ui.Theme.border
+                radius: 2; color: Ui.Theme.badge
             }
         }
 
@@ -36,18 +34,19 @@ Item {
             x: 12; width: parent.width - 24
             spacing: 4
 
+            // 分组标题（13px 灰）+ 右侧说明
             Item {
                 width: parent.width; height: 26
                 Text {
                     anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
                     text: "最近动态"
-                    color: Ui.Theme.fg; font.pixelSize: 13; font.weight: Font.DemiBold
+                    color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
                     font.family: Ui.Theme.fontFamily
                 }
                 Text {
                     anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                     text: "点击条目看详情"
-                    color: Ui.Theme.faint; font.pixelSize: 10
+                    color: Ui.Theme.fg3; font.pixelSize: Ui.Theme.fsCap
                     font.family: Ui.Theme.fontFamily
                 }
             }
@@ -66,10 +65,7 @@ Item {
                     SequentialAnimation {
                         id: stagger
                         PauseAnimation { duration: index * 25 }
-                        ParallelAnimation {
-                            NumberAnimation { target: evItem; property: "opacity"; to: 1; duration: 160 }
-                            NumberAnimation { target: evRow; property: "x"; from: 8; to: 0; duration: 200 }
-                        }
+                        NumberAnimation { target: evItem; property: "opacity"; to: 1; duration: 160 }
                     }
 
                     Rectangle {
@@ -77,15 +73,14 @@ Item {
                         width: parent.width
                         height: evItem.hasDetail ? 56 : 44
                         anchors.verticalCenter: parent.verticalCenter
-                        radius: Ui.Theme.radiusMd
+                        radius: Ui.Theme.radiusLg
                         color: "#FFFFFF"
-                        border.width: 1; border.color: Ui.Theme.border
                         // hover 高亮独立层：透明度动画，避免 color 插值灰影
                         Rectangle {
                             anchors.fill: parent; radius: parent.radius
-                            color: "#FAFAFB"
+                            color: Ui.Theme.hoverOverlay
                             opacity: evHover.hovered ? 1 : 0
-                            Behavior on opacity { NumberAnimation { duration: 110 } }
+                            Behavior on opacity { NumberAnimation { duration: Ui.Theme.durFast } }
                         }
                         HoverHandler { id: evHover }
                         MouseArea {
@@ -96,33 +91,33 @@ Item {
 
                         Row {
                             anchors.fill: parent
-                            anchors.leftMargin: 9; anchors.rightMargin: 10
+                            anchors.leftMargin: 10; anchors.rightMargin: 10
                             spacing: 10
 
                             Column {
                                 anchors.verticalCenter: parent.verticalCenter
                                 spacing: 3; width: 58
-                                // 类型药丸（cc-switch 徽章：淡彩底+深彩字）
+                                // 类型药丸：淡彩底+深彩字
                                 Rectangle {
                                     width: tagTxt.width + 12; height: 18; radius: 9
                                     color: modelData.priority === "high" ? Ui.Theme.dangerSoft
                                            : modelData.priority === "medium"
-                                           ? Qt.rgba(0.788, 0.478, 0.086, 0.12)
-                                           : Ui.Theme.secondary
+                                           ? Ui.Theme.warnSoft
+                                           : Ui.Theme.track
                                     Text {
                                         id: tagTxt
                                         anchors.centerIn: parent
                                         text: modelData.tag
                                         color: modelData.priority === "high" ? Ui.Theme.danger
                                                : modelData.priority === "medium" ? Ui.Theme.warn
-                                               : Ui.Theme.muted
-                                        font.pixelSize: 10; font.weight: Font.Medium
+                                               : Ui.Theme.fg2
+                                        font.pixelSize: Ui.Theme.fsCap; font.weight: Font.Medium
                                         font.family: Ui.Theme.fontFamily
                                     }
                                 }
                                 Text {
                                     text: modelData.time
-                                    color: Ui.Theme.faint; font.pixelSize: 9
+                                    color: Ui.Theme.fg3; font.pixelSize: 9
                                     font.family: Ui.Theme.fontFamily
                                     elide: Text.ElideRight; width: parent.width
                                 }
@@ -135,14 +130,14 @@ Item {
                                 Text {
                                     width: parent.width
                                     text: modelData.course
-                                    color: Ui.Theme.muted; font.pixelSize: 10
+                                    color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsCap
                                     font.family: Ui.Theme.fontFamily
                                     elide: Text.ElideRight
                                 }
                                 Text {
                                     width: parent.width
                                     text: modelData.title
-                                    color: Ui.Theme.fg; font.pixelSize: 11
+                                    color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsSub
                                     font.family: Ui.Theme.fontFamily
                                     elide: Text.ElideRight
                                 }
@@ -152,7 +147,7 @@ Item {
                                     visible: evItem.hasDetail
                                     width: parent.width
                                     text: modelData.detail
-                                    color: Ui.Theme.primary; font.pixelSize: 10
+                                    color: Ui.Theme.primary; font.pixelSize: Ui.Theme.fsCap
                                     font.weight: Font.Medium
                                     font.family: Ui.Theme.fontFamily
                                     elide: Text.ElideRight
@@ -163,23 +158,36 @@ Item {
                 }
             }
 
+            // 空态（FLstyle：图标井 + 粗标题 + 副文）
             Rectangle {
                 visible: Bridge.events.length === 0
-                width: parent.width; height: 80; radius: Ui.Theme.radiusMd
+                width: parent.width; height: 88; radius: Ui.Theme.radiusLg
                 color: "#FFFFFF"
-                border.width: 1; border.color: Ui.Theme.border
                 Column {
-                    anchors.centerIn: parent; spacing: 4
+                    anchors.centerIn: parent; spacing: 6
+                    Item {
+                        width: 32; height: 32
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        Rectangle {
+                            anchors.fill: parent; radius: 16; color: Ui.Theme.primarySoft
+                        }
+                        Glyphs {
+                            anchors.centerIn: parent
+                            width: 14; height: 14; thickness: 2.4
+                            kind: 3   // Pulse
+                            color: Ui.Theme.primary
+                        }
+                    }
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: "暂无新动态"
-                        color: Ui.Theme.fg; font.pixelSize: 13; font.weight: Font.Medium
+                        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.DemiBold
                         font.family: Ui.Theme.fontFamily
                     }
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: "巡检发现新作业/资料/通知会出现在这里"
-                        color: Ui.Theme.faint; font.pixelSize: 10
+                        color: Ui.Theme.fg3; font.pixelSize: Ui.Theme.fsCap
                         font.family: Ui.Theme.fontFamily
                     }
                 }
