@@ -53,6 +53,7 @@ URL_CHAPTER = "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse"
 URL_NOTICELIST = "https://notice.chaoxing.com/pc/notice/getNoticeList"
 URL_PAN_INDEX = "https://pan-yz.cldisk.com/pcuserpan/index"
 URL_PAN_LIST = "https://pan-yz.cldisk.com/opt/listres"
+URL_ANTISPIDER = "https://mooc1.chaoxing.com/antispiderShowVerify.ac"
 
 LOGIN_MARKERS = ("passport2.chaoxing.com/login", "用户登录")
 
@@ -97,14 +98,20 @@ def parse_courses(html: str) -> list[dict]:
         if (cid, clazz, cpi) in seen:
             continue
         seen.add((cid, clazz, cpi))
-        seg = html[m.end():m.end() + 1600]
+        seg = html[m.end():m.end() + 2500]
         nm = re.search(r'course-name[^>]*title="([^"]+)"', seg)
+        # 老师在 <p class="line2 color3" title="姓名">（color2 是学校名，别取错）；
+        # 旧版页面用 <p class="overHidden2">，留作兜底
         teacher = ""
-        for pm in re.finditer(r'<p class="overHidden2"[^>]*>([^<]{2,15})</p>', seg):
-            txt = pm.group(1).strip()
-            if txt and txt != (nm.group(1) if nm else ""):
-                teacher = txt
-                break
+        tp = re.search(r'<p class="line2 color3"[^>]*title="([^"]+)"', seg)
+        if tp:
+            teacher = tp.group(1).strip()
+        else:
+            for pm in re.finditer(r'<p class="overHidden2"[^>]*>([^<]{2,15})</p>', seg):
+                txt = pm.group(1).strip()
+                if txt and txt != (nm.group(1) if nm else ""):
+                    teacher = txt
+                    break
         courses.append({
             "name": html_mod.unescape(nm.group(1)) if nm else "?",
             "teacher": html_mod.unescape(teacher),
@@ -144,6 +151,17 @@ def parse_cd_filename(content_disposition: str) -> str:
         return raw.encode("latin-1").decode("utf-8")
     except (UnicodeEncodeError, UnicodeDecodeError):
         return unquote(raw)
+
+
+def is_antispider_location(location: str) -> bool:
+    """302 Location 是否指向反爬验证页（downloadData 被 9010 拦截的标志）。"""
+    return "antispider" in str(location or "")
+
+
+def _is_antispider_text(body: str) -> bool:
+    """响应体是否为 9010 反爬提示页（CDN 202 时靠它区分限流与拦截）。"""
+    t = strip_tags(str(body or ""))
+    return "9010" in t and "验证码" in t
 
 
 def sanitize_filename(name: str, fallback: str = "download.bin") -> str:
@@ -689,12 +707,46 @@ class ChaoxingClient:
         walk(0, "", "", 1)
         return hits
 
+    # ---------------- 反爬验证码（downloadData 9010 拦截的人工解除） ----------
+
+    def fetch_antispider_captcha(self, save_path: str) -> bool:
+        """把 9010 拦截页的验证码图片存到 save_path，供人工识读。
+
+        只存图不识码——识别必须由人完成（反爬是防自动化滥用，
+        程序自动 OCR 解码不在本工具的边界内）。
+        取图后立即持久化 cookie：验证码与会话绑定，跨进程提交
+        （如 xxt download 存图后带 --code 重跑）才对得上号。
+        """
+        import random
+        t = random.randint(0, 2147483647)
+        r = self.session.get(f"https://mooc1.chaoxing.com/processVerifyPng.ac?t={t}",
+                             headers={"Referer": URL_ANTISPIDER}, timeout=self.timeout)
+        self._save_cookies()
+        if r.status_code != 200 or not r.content:
+            return False
+        with open(save_path, "wb") as f:
+            f.write(r.content)
+        return True
+
+    def submit_antispider_captcha(self, code: str) -> bool:
+        """提交人工输入的 4 位验证码。返回 True=校验通过（拦截解除）。"""
+        r = self.session.post(
+            "https://mooc1.chaoxing.com/html/processVerify.ac",
+            data={"app": "0", "ucode": code.strip()},
+            headers={"Referer": URL_ANTISPIDER,
+                     "Origin": "https://mooc1.chaoxing.com"},
+            timeout=self.timeout)
+        # 校验通过返回非 9010 页；失败仍是同一个提示页（并换一张验证码）
+        return not _is_antispider_text(r.text)
+
     def download_material(self, c: dict, data_id: int, save_dir: str,
                           filename: str = "") -> dict:
         """流式下载资料文件，返回 {path, size}。
 
         流程：downloadData 拿 302 签名 URL → 带 pan-yz Referer 请求 CDN
         （缺 Referer 会 403）→ 边下边写盘，不把大文件整个读进内存。
+        学习通反爬（9010）拦截时抛 RuntimeError，提示里带人工验证码
+        解除路径（fetch_antispider_captcha / submit_antispider_captcha）。
         """
         r = self.get(URL_DOWNLOAD, params={
             "dataId": data_id, "classId": c["clazzid"], "cpi": c["cpi"],
@@ -704,6 +756,11 @@ class ChaoxingClient:
         cdn = r.headers.get("Location")
         if not cdn:
             raise RuntimeError("下载接口未返回 CDN 地址")
+        if is_antispider_location(cdn):
+            raise RuntimeError(
+                "触发学习通反爬拦截（9010）：下载操作被要求人机验证。"
+                "解除方式：调用 fetch_antispider_captcha 取验证码图片，"
+                "人工识读后 submit_antispider_captcha(四位码)，再重试下载")
         os.makedirs(save_dir, exist_ok=True)
         cd = ""
         total = 0
@@ -721,6 +778,11 @@ class ChaoxingClient:
                                 f.write(chunk)
                                 total += len(chunk)
                     return {"path": path, "size": total}
+                if _is_antispider_text(r2.text[:2000]):
+                    raise RuntimeError(
+                        "触发学习通反爬拦截（9010）：下载操作被要求人机验证。"
+                        "解除方式：调用 fetch_antispider_captcha 取验证码图片，"
+                        "人工识读后 submit_antispider_captcha(四位码)，再重试下载")
             if attempt == 1:
                 _t.sleep(1.5)
         raise RuntimeError(f"CDN 下载失败: HTTP {r2.status_code}（连试两次；"
@@ -997,9 +1059,9 @@ class ChaoxingClient:
                 size = it.get("filesize") or 0
                 size_h = f"{size / 1048576:.1f}MB" if size >= 1048576 else f"{size / 1024:.0f}KB"
                 items.append({"kind": "file", "name": it.get("name") or "?",
-                              "size": size_h, "id": None})
+                              "size": size_h, "id": str(it.get("id") or "")})
             else:
                 items.append({"kind": "folder", "name": it.get("name") or "?",
-                              "size": None, "id": str(it.get("id"))})
+                              "size": None, "id": str(it.get("id") or "")})
         return {"where": "根目录" if not folder_id else f"文件夹 {folder_id}",
                 "total": j.get("totalCount", len(lst)), "items": items}

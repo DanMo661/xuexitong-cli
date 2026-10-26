@@ -108,17 +108,31 @@ def _login_or_die(cli) -> None:
         raise SystemExit(2)
 
 
-def _cached_schedule() -> dict | None:
-    """桌面助手的课表缓存（全学期 + 节次表 + 学期锚点），零网络。"""
-    root = Path(__file__).resolve().parent.parent
+def _cached_schedule(max_age_h: float | None = None,
+                     path: Path | None = None) -> dict | None:
+    """桌面助手的课表缓存（全学期 + 节次表 + 学期锚点），零网络。
+
+    max_age_h 给定时要求 saved_at 距今不超龄（today 用 24h：过期回退网络，
+    免得周一还拿周日的"当前周"）；不给则只要有 lessons 就算命中
+    （week/ics 查任意周，旧一点的缓存也优于 20+ 请求的全量拉取）。
+    path 供单测注入临时 store.json。
+    """
+    store = path or Path(__file__).resolve().parent.parent / "store.json"
     try:
-        d = json.loads((root / "store.json").read_text(encoding="utf-8"))
+        d = json.loads(store.read_text(encoding="utf-8"))
         sc = d.get("schedule_cache") or {}
-        if sc.get("lessons"):
-            return sc
+        if not sc.get("lessons"):
+            return None
     except Exception:
-        pass
-    return None
+        return None
+    if max_age_h is not None:
+        try:
+            saved = dt.datetime.fromisoformat(sc.get("saved_at"))
+        except (TypeError, ValueError):
+            return None
+        if (dt.datetime.now() - saved).total_seconds() > max_age_h * 3600:
+            return None
+    return sc
 
 
 def _term_schedule(cli) -> dict:
@@ -140,6 +154,31 @@ def _term_start(sc: dict):
     from .client import ms_to_date
     fw = (sc.get("curriculum") or {}).get("firstWeekDate")
     return ms_to_date(int(fw)) if fw else None
+
+
+def _current_week(sc: dict, today: dt.date) -> int:
+    """由 firstWeekDate 推今天的教学周（缓存里的 realCurrentWeek 是存盘时
+    的值，缓存越周会错；日期推导永远对），异常时回退服务端周数。"""
+    from .client import ms_to_date
+    fw = (sc.get("curriculum") or {}).get("firstWeekDate")
+    if fw:
+        w = (today - ms_to_date(int(fw))).days // 7 + 1
+        maxw = int(sc.get("curriculum", {}).get("maxWeek") or 0)
+        if w >= 1 and (not maxw or w <= maxw):
+            return w
+    cur = sc.get("curriculum", {})
+    return int(cur.get("realCurrentWeek") or cur.get("currentWeek") or 0)
+
+
+# ---------------------------------------------------------------- JSON 输出
+
+def _jdt(d) -> str | None:
+    """datetime → "YYYY-MM-DD HH:MM"（None 透传），--json 统一时间格式。"""
+    return f"{d:%Y-%m-%d %H:%M}" if d else None
+
+
+def _print_json(items) -> None:
+    print(json.dumps(items, ensure_ascii=False, indent=2))
 
 
 # ---------------------------------------------------------------- 命令
@@ -198,19 +237,37 @@ def _day_rows(lessons, times, monday: dt.date):
 
 
 def cmd_today(a) -> int:
-    cli = _client()
-    _login_or_die(cli)
-    sc = cli.fetch_schedule()
+    sc = _cached_schedule(max_age_h=24)
+    cached = sc is not None
+    if not cached:   # 缓存缺失/过期才走网络（回退路径）
+        cli = _client()
+        _login_or_die(cli)
+        sc = cli.fetch_schedule()
     cur = sc.get("curriculum", {})
-    week = int(cur.get("realCurrentWeek") or cur.get("currentWeek") or 0)
-    from .client import ms_to_date
+    from .client import ms_to_date, expand_weeks
     fw = cur.get("firstWeekDate")
-    monday = ms_to_date(int(fw)) + dt.timedelta(days=(week - 1) * 7) if fw \
-        else dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
-    times = _lesson_times(sc)
     today = dt.date.today()
-    rows = [r for r in _day_rows(sc.get("lessons", []), times, monday)
+    if cached:
+        # 全学期缓存：按今天日期推教学周（realCurrentWeek 是存盘时的值），
+        # 再按 weeks 串筛出本周的课——全程零网络
+        week = _current_week(sc, today)
+    else:
+        week = int(cur.get("realCurrentWeek") or cur.get("currentWeek") or 0)
+    lessons = [l for l in sc.get("lessons", [])
+               if not l.get("weeks") or week in expand_weeks(l["weeks"])]
+    monday = ms_to_date(int(fw)) + dt.timedelta(days=(week - 1) * 7) if fw \
+        else today - dt.timedelta(days=today.weekday())
+    times = _lesson_times(sc)
+    rows = [r for r in _day_rows(lessons, times, monday)
             if r[1].date() == today]
+    if a.json:
+        now = dt.datetime.now()
+        _print_json([
+            {"start": _jdt(s), "end": _jdt(e), "name": name,
+             "location": loc, "teacher": tea,
+             "state": "进行中" if s <= now <= e else ("已结束" if e < now else "未开始")}
+            for _, s, e, name, loc, tea in rows])
+        return 0
     wd = "一二三四五六日"[today.weekday()]
     print(_c(f"{today:%Y-%m-%d} 周{wd}", "bold"),
           _c(f"第 {week} 教学周", "cyan"))
@@ -273,6 +330,13 @@ def cmd_hw(a) -> int:
     _login_or_die(cli)
     names = _active_names(_term_schedule(cli)) if not a.all_courses else None
     rows = cli.fetch_deadline_overview(only_courses=names)
+    if a.json:
+        _print_json([
+            {"course": r["course"], "title": r["title"], "status": r["status"],
+             "deadline": _jdt(r.get("deadline_dt")) or r.get("deadline"),
+             "url": r.get("url") or ""}
+            for r in rows])
+        return 0
     if not rows:
         print(_c("没有待交的作业 ✓", "green"))
         return 0
@@ -307,6 +371,14 @@ def cmd_exam(a) -> int:
     start = _term_start(sc) if sc else None
     if start and not a.all:
         rows = [r for r in rows if r["start"].date() >= start]
+    if a.json:
+        _print_json([
+            {"name": r["name"], "start": _jdt(r["start"]), "end": _jdt(r["end"]),
+             "durationMin": r["durationMin"], "status": r["status"],
+             "answer": r["answer"], "score": r["score"], "mode": r["mode"]}
+            for r in rows])
+        return 0
+    if start and not a.all:
         print(_c(f"（只显示 {start:%Y-%m-%d} 开学后的考试；--all 看全部）",
                  "dim"))
     if not rows:
@@ -330,6 +402,15 @@ def cmd_notice(a) -> int:
         _stderr("--limit 至少为 1")
         return 1
     items = cli.fetch_notices(limit=a.limit, unread_only=a.unread)
+    if a.json:
+        _print_json([
+            {"title": (it.get("title") or "").strip(),
+             "sender": it.get("createrName") or it.get("sender") or "",
+             "time": str(it.get("sendTime") or "")[:19],
+             "unread": str(it.get("isread", "1")) == "0",
+             "content": it.get("content") or ""}
+            for it in items])
+        return 0
     if not items:
         print(_c("没有通知", "green"))
         return 0
@@ -359,6 +440,12 @@ def cmd_progress(a) -> int:
     todo = [(n, r) for n, r in best.items()
             if r.get("total") and r["total"] > (r.get("done") or 0)]
     todo.sort(key=lambda x: -(x[1]["total"] - (x[1]["done"] or 0)))
+    if a.json:
+        _print_json([
+            {"course": name, "done": r.get("done") or 0, "total": r["total"],
+             "left": r["total"] - (r.get("done") or 0)}
+            for name, r in todo])
+        return 0
     if not todo:
         print(_c("任务点全部完成 ✓", "green"))
         return 0
@@ -396,6 +483,50 @@ def cmd_materials(a) -> int:
     return 0
 
 
+def _try_download(cli, c: dict, data_id: int, save: str, name: str,
+                  code: str = ""):
+    """下载；9010 反爬拦截时按需引导人工验证码（不自动识码）。"""
+    try:
+        return cli.download_material(c, data_id, save, name)
+    except RuntimeError as e:
+        if "9010" not in str(e):
+            raise
+    # 反爬拦截：验证码必须人工识读（程序不自动 OCR，那是反爬要防的滥用）
+    cap = str(Path.home() / ".xxt_captcha.png")
+    if code:
+        # --code 是针对上一次存的图提交（取图会换新图作废旧码，别再取）
+        pass
+    else:
+        if not cli.fetch_antispider_captcha(cap):
+            _stderr("取反爬验证码图片失败，稍后再试")
+            return None
+        try:
+            if sys.stdin.isatty():
+                print(_c(f"触发学习通反爬拦截，验证码已存 {cap}（打开看图）",
+                         "yellow"))
+                for _ in range(3):
+                    code = input("输入图中 4 位验证码（回车放弃）: ").strip()
+                    if not code:
+                        return None
+                    if len(code) == 4:
+                        break
+                if len(code) != 4:
+                    return None
+        except EOFError:
+            code = ""
+        if not code:
+            _stderr(f"触发学习通反爬拦截（9010）。验证码图片已存：{cap}\n"
+                    f"打开图片识读后重跑，加 --code 四位码 参数提交")
+            return None
+    if not cli.submit_antispider_captcha(code):
+        cli.fetch_antispider_captcha(cap)   # 换一张新图供下次尝试
+        _stderr(f"验证码不对或已跨会话失效（验证码与取图会话绑定）。"
+                f"最稳路径：在本机终端直接跑 xxt download（交互输入验证码）。"
+                f"已换新图：{cap}")
+        return None
+    return cli.download_material(c, data_id, save, name)
+
+
 def cmd_download(a) -> int:
     cli = _client()
     _login_or_die(cli)
@@ -417,7 +548,9 @@ def cmd_download(a) -> int:
         _stderr("没找到匹配的文件（先 xxt materials 看看）")
         return 1
     save = str(Path(a.dir).resolve())
-    out = cli.download_material(c, hit["data_id"], save, hit["name"])
+    out = _try_download(cli, c, hit["data_id"], save, hit["name"], a.code)
+    if not out:
+        return 1
     print(_c(f"已下载：{out['path']}（{out['size'] // 1024} KB）", "green"))
     return 0
 
@@ -427,11 +560,16 @@ def cmd_pan(a) -> int:
     _login_or_die(cli)
     d = cli.fetch_pan_files(a.folder)
     rows = d.get("items") if isinstance(d, dict) else d
+    where = d.get("where", "?") if isinstance(d, dict) else "?"
+    print(_c(f"{where}（{len(rows or [])} 项）", "dim"))
     for f in rows or []:
         kind = f.get("kind") or f.get("type") or ""
+        size = f"  {_pad(f.get('size') or '-', 8)}" if kind != "folder" else ""
         print(f"{'📁' if kind == 'folder' else '📄'} "
-              f"{f.get('name') or f.get('title')}  "
+              f"{f.get('name') or f.get('title')}{size}  "
               + _c(f"[{f.get('id', '')}]", "dim"))
+    if any((f.get("kind") == "folder" for f in rows or [])):
+        print(_c("下钻：xxt pan 文件夹id", "dim"))
     return 0
 
 
@@ -469,6 +607,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_courses)
 
     s = sub.add_parser("today", help="今天的课")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_today)
 
     s = sub.add_parser("week", help="整周课表")
@@ -478,19 +617,23 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("hw", help="待交作业截止看板（本学期）")
     s.add_argument("--all-courses", action="store_true",
                    help="不过滤往年课（默认只看本学期）")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_hw)
 
     s = sub.add_parser("exam", help="考试安排（本学期）")
     s.add_argument("--all", action="store_true", help="显示全部（含往年）")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_exam)
 
     s = sub.add_parser("notice", help="通知中心")
     s.add_argument("--unread", action="store_true", help="只看未读")
     s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_notice)
 
     s = sub.add_parser("progress", help="任务点进度（本学期）")
     s.add_argument("--all-courses", action="store_true", help="全部课")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_progress)
 
     s = sub.add_parser("materials", help="课程资料区")
@@ -504,6 +647,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--id", type=int, default=0, help="data_id（materials 输出里的编号）")
     s.add_argument("--find", default="", help="按文件名关键词取第一个匹配")
     s.add_argument("--dir", default=".", help="保存目录")
+    s.add_argument("--code", default="", help="反爬验证码（触发 9010 拦截后人工识读传入）")
     s.set_defaults(fn=cmd_download)
 
     s = sub.add_parser("pan", help="个人云盘")

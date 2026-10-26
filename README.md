@@ -161,20 +161,35 @@ python -m venv .venv
 
 ```bash
 xxt today                     # 今天有什么课（含进行中/已结束状态）
+xxt today --json              # JSON 输出（today/hw/exam/notice/progress 均支持）
 xxt week [12]                 # 本周 / 第 12 周课表（按天分组）
 xxt hw                        # 待交作业截止看板（默认只看本学期）
 xxt exam                      # 考试安排（默认只看本学期，--all 看全部）
 xxt notice [--unread]         # 通知中心
 xxt progress                  # 任务点进度（默认只看本学期）
-xxt courses                   # 课程列表（★=本学期课表内）
+xxt courses                   # 课程列表（★=本学期课表内，含任课老师）
 xxt whoami                    # 姓名/学校/uid
 xxt materials 数字信号处理    # 课程资料区（含下载用编号）
 xxt materials 数图 --find 实验   # 递归搜文件名
 xxt download 数图 --find 实验 --dir D:\dst   # 下载第一个匹配
-xxt pan                       # 个人云盘
+xxt pan                       # 个人云盘（文件/文件夹带 id）
+xxt pan <文件夹id>            # 云盘下钻一层
 xxt ics -o 课表.ics           # 全学期课表导出日历
 ```
 
+- `today` 秒开：桌面助手课表缓存（`store.json` 的 `schedule_cache`）距
+  保存不足 24h 就直接用缓存，零网络立即返回；过期/缺失回退在线拉取
+  （教学周由学期锚点日期推导，不吃存盘时的"当前周"旧值）。`week`/`ics`
+  查任意周则一律缓存优先
+- `--json`（today/hw/exam/notice/progress）：输出 UTF-8 JSON 数组，
+  时间统一 `YYYY-MM-DD HH:MM` 字符串，无表格/进度条/颜色码，方便脚本
+  与 agent 消费
+- **下载 9010 反爬**：下载接口可能触发学习通人机验证（下载被 302 到
+  antispider 页，报错会明确提示）。`xxt download` 在终端交互模式下会
+  自动取验证码图存 `~\.xxt_captcha.png`、提示人工输入 4 位码后重试
+  （程序不自动识码）；非交互场景按报错提示带 `--code 四位码` 重跑。
+  注意验证码与取图会话绑定，跨进程重跑可能失效——最稳是在本机终端
+  直接跑一次交互流程
 - 同课两班自动去重；表格按 CJK 显示宽度对齐，GBK 控制台自动切 UTF-8 输出
 - 学期过滤规则与桌面助手一致：以课表缓存里的本学期课程为准，往年课
   默认不出现在 hw/exam/progress（`--all*` 参数可看全部）

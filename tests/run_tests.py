@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from xuexitong_mcp.client import (  # noqa: E402
     aes_encrypt, aes_decrypt, build_ics, compress_weeks, escape_ics,
-    expand_weeks, hidden_value, is_homework_pending, ms_to_date,
-    nearest_datetime_for, parse_cd_filename, parse_courses,
+    expand_weeks, hidden_value, is_antispider_location, is_homework_pending,
+    ms_to_date, nearest_datetime_for, parse_cd_filename, parse_courses,
     parse_homework_detail, parse_materials, parse_section_times,
     sanitize_filename, strip_tags, week_in_schedule,
 )
@@ -290,6 +290,105 @@ def test_build_ics():
         raise SystemExit("缺少 firstWeekDate 应报错")
     except RuntimeError:
         pass
+
+
+# ---------------------------------------------------------------- v1.3.x CLI 新逻辑
+
+COURSE_HTML_V2 = """
+<a href="https://mooc1.chaoxing.com/visit/stucoursemiddle?courseid=268423854&clazzid=157979904&cpi=412061369&ismooc2=1&v=2" target="_blank">
+  <span class="course-name overHidden2" style="word-break: break-all;" title="新能源汽车发展">新能源汽车发展</span>
+</a>
+<p class="margint10 line2 color2" title="五邑大学智慧教学系统">五邑大学智慧教学系统</p>
+<p class="line2 color3" title="李昌明">李昌明</p>
+"""
+
+
+def test_parse_courses_teacher_line2_color3():
+    """2026 版课程列表：老师在 <p class="line2 color3" title="X">（color2 是学校）。"""
+    courses = parse_courses(COURSE_HTML_V2)
+    assert len(courses) == 1
+    assert courses[0]["teacher"] == "李昌明"
+    assert courses[0]["courseid"] == "268423854"
+    # 旧版 overHidden2 结构仍兼容（run_tests 顶部的 COURSE_HTML 已覆盖）
+
+
+def test_is_antispider_location():
+    assert is_antispider_location("https://mooc1.chaoxing.com/antispiderShowVerify.ac")
+    assert is_antispider_location("/antispiderShowVerify.ac")
+    assert not is_antispider_location("https://pan-yz.cldisk.com/r/123")
+    assert not is_antispider_location("")
+    assert not is_antispider_location(None)
+
+
+def test_cached_schedule_freshness():
+    """today 的 24h 新鲜度判定：<24h 命中、>=24h 过期、无 saved_at 不命中、
+    不给 max_age_h 时只要有 lessons 就命中（week/ics 语义）。"""
+    import json as _json
+    import tempfile
+    from pathlib import Path
+    from xuexitong_mcp import cli as xcli
+
+    def make(saved_at):
+        fd, name = tempfile.mkstemp(suffix=".json")
+        os.close(fd)   # Windows：不关句柄，后续写/删同一路径会 WinError 32
+        f = Path(name)
+        sc = {"lessons": [{"name": "x", "dayOfWeek": 1}],
+              "curriculum": {"firstWeekDate": 1788105600000}}
+        if saved_at is not None:
+            sc["saved_at"] = saved_at
+        f.write_text(_json.dumps({"schedule_cache": sc}), encoding="utf-8")
+        return f
+
+    now = datetime.now()
+    fresh = make(now.strftime("%Y-%m-%dT%H:%M:%S"))
+    stale = make((now - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%S"))
+    nosaved = make(None)
+    missing = Path(tempfile.mkdtemp()) / "nope.json"
+    try:
+        assert xcli._cached_schedule(max_age_h=24, path=fresh) is not None
+        assert xcli._cached_schedule(max_age_h=24, path=stale) is None
+        assert xcli._cached_schedule(max_age_h=24, path=nosaved) is None
+        assert xcli._cached_schedule(path=missing) is None
+        # 无龄限：过期缓存也命中（week/ics 用）
+        assert xcli._cached_schedule(path=stale) is not None
+    finally:
+        for f in (fresh, stale, nosaved):
+            f.unlink(missing_ok=True)
+
+
+def test_current_week_derived_from_first_week_date():
+    """教学周由 firstWeekDate 推导（缓存的 realCurrentWeek 是存盘时的值），
+    越界回退服务端周数。"""
+    from xuexitong_mcp import cli as xcli
+    cur = {"firstWeekDate": 1788105600000, "maxWeek": 25}  # 2026-08-31 周一
+    assert xcli._current_week({"curriculum": cur}, date(2026, 10, 26)) == 9
+    assert xcli._current_week({"curriculum": cur}, date(2026, 8, 31)) == 1
+    # 学期末之后按 maxWeek 封顶 → 回退服务端字段
+    fallback = {"curriculum": {"firstWeekDate": 1788105600000,
+                               "maxWeek": 16, "realCurrentWeek": 12}}
+    assert xcli._current_week(fallback, date(2027, 3, 1)) == 12
+    # 无锚点日期：直接用服务端周数
+    assert xcli._current_week(
+        {"curriculum": {"currentWeek": 7}}, date(2026, 10, 26)) == 7
+
+
+def test_json_output_format():
+    """--json 输出契约：datetime → "YYYY-MM-DD HH:MM"、无颜色码、UTF-8 中文原样。"""
+    import io
+    import json as _json
+    from contextlib import redirect_stdout
+    from xuexitong_mcp import cli as xcli
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        xcli._print_json([{"start": xcli._jdt(datetime(2026, 10, 26, 14, 0)),
+                           "name": "电磁场与微波技术", "deadline": xcli._jdt(None)}])
+    out = buf.getvalue()
+    assert "\033[" not in out                      # 无颜色码
+    data = _json.loads(out)
+    assert data[0]["start"] == "2026-10-26 14:00"   # 统一时间格式
+    assert data[0]["deadline"] is None
+    assert data[0]["name"] == "电磁场与微波技术"     # ensure_ascii=False
 
 
 def run_all() -> int:
