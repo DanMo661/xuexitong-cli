@@ -486,6 +486,97 @@ def test_week_grid_fixed_rail_and_colors():
     assert g["curWeek"] >= 1
 
 
+# ---------------------------------------------------------------- CLI 纯逻辑
+
+def _fake_sc(first_monday, lessons):
+    """合成全学期课表缓存：firstWeekDate 用 UTC 04:00 的 ms 保证
+    ms_to_date 落回同一天（CN 时区正午）。"""
+    from datetime import time as dtime
+    from xuexitong_mcp.client import ms_to_date
+    from xuexitong_mcp import cli as xxt
+    ms = int(datetime(first_monday.year, first_monday.month,
+                      first_monday.day, 4, 0).timestamp() * 1000)
+    assert ms_to_date(ms) == first_monday   # 时区前提自证，翻车先炸这里
+    return {
+        "saved_at": "2026-10-27T10:00:00",
+        "lessons": lessons,
+        "curriculum": {
+            "firstWeekDate": ms, "maxWeek": 20,
+            "lessonTimeConfigArray": ["8:00-8:50", "9:00-9:50",
+                                      "10:10-11:00", "14:00-14:50"],
+        },
+    }
+
+
+def _lesson(name, dow, begin, length, weeks):
+    return {"name": name, "dayOfWeek": dow, "beginNumber": begin,
+            "length": length, "weeks": weeks, "location": "教三",
+            "teacherName": "张三"}
+
+
+def test_cli_next_lesson_same_day_and_next_week():
+    from xuexitong_mcp import cli as xxt
+    fw = datetime(2026, 9, 7).date()          # 第 1 周周一
+    sc = _fake_sc(fw, [
+        _lesson("信号", 1, 1, 2, "1-20"),      # 周一 8:00-9:50
+        _lesson("物理", 1, 4, 1, "1-20"),      # 周一 14:00-14:50
+        _lesson("毛概", 5, 1, 2, "1-20"),      # 周五 8:00
+    ])
+    # 周一（第8周）早上 7:00 → 信号 8:00（今天）
+    now = datetime(2026, 10, 26, 7, 0)
+    hit = xxt._next_lesson(sc, now)
+    assert hit and hit[0] == 0 and hit[3] == "信号"
+    assert hit[1] == datetime(2026, 10, 26, 8, 0)
+    # 周一 12:00（上午两节已过）→ 物理 14:00（今天下午）
+    hit = xxt._next_lesson(sc, datetime(2026, 10, 26, 12, 0))
+    assert hit and hit[0] == 0 and hit[3] == "物理"
+    # 周五 9:30（信号进行中不算，取未来）→ 下周一信号，days_ahead=3
+    hit = xxt._next_lesson(sc, datetime(2026, 10, 30, 9, 30))
+    assert hit and hit[0] == 3 and hit[3] == "信号"
+    assert hit[1] == datetime(2026, 11, 2, 8, 0)
+
+
+def test_cli_next_lesson_weeks_filter_and_none():
+    from xuexitong_mcp import cli as xxt
+    fw = datetime(2026, 9, 7).date()
+    # 只有第 2 周有课，现在第 8 周 → 14 天内无课
+    sc = _fake_sc(fw, [_lesson("单周课", 1, 1, 2, "2")])
+    assert xxt._next_lesson(sc, datetime(2026, 10, 26, 7, 0)) is None
+    # 第 2 周周一（9/14）早上查 → 当天 8:00 命中
+    hit = xxt._next_lesson(sc, datetime(2026, 9, 14, 7, 0))
+    assert hit and hit[3] == "单周课" and hit[0] == 0
+    # weeks 串 "2,10"：第 10 周周一 = 11/09，距 10/26 恰 14 天 =
+    # 地平线边界最后一天，必须能命中（逗号周次语法同步覆盖）
+    sc2 = _fake_sc(fw, [_lesson("双段课", 1, 1, 1, "2,10")])
+    hit = xxt._next_lesson(sc2, datetime(2026, 10, 26, 7, 0))
+    assert hit and hit[3] == "双段课" and hit[0] == 14
+    assert hit[1].date() == datetime(2026, 11, 9).date()
+    # 第 10 周周三（11/11，16 天后）超出地平线 → None（旧断言的错误预期）
+    sc3 = _fake_sc(fw, [_lesson("超界课", 3, 1, 1, "10")])
+    assert xxt._next_lesson(sc3, datetime(2026, 10, 26, 7, 0)) is None
+
+
+def test_cli_fmt_countdown():
+    from xuexitong_mcp import cli as xxt
+    assert xxt._fmt_countdown(45) == "45 分钟"
+    assert xxt._fmt_countdown(60) == "1 小时"
+    assert xxt._fmt_countdown(89) == "1 小时 29 分"
+    assert xxt._fmt_countdown(1440) == "1 天"
+    assert xxt._fmt_countdown(1500) == "1 天 1 小时"
+
+
+def test_cli_today_rows_zero_network_shape():
+    from xuexitong_mcp import cli as xxt
+    fw = datetime(2026, 9, 7).date()
+    sc = _fake_sc(fw, [
+        _lesson("信号", 2, 1, 2, "1-20"),      # 周二 8:00
+        _lesson("无周串", 2, 4, 1, ""),         # 无 weeks=恒有
+    ])
+    rows = xxt._today_rows(sc)
+    # 只有当 query 日是周二才会命中；此处只验证结构不炸 + 排序
+    assert all(r[1] <= r[2] for r in rows)
+
+
 # ----------------------------------------------------------------
 
 def run_all() -> int:

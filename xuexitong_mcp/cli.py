@@ -10,9 +10,12 @@
 
 用法示例：
   xxt today                     # 今天有什么课
+  xxt next                      # 下一节课（含倒计时，跨天跨周找）
   xxt week 12                   # 第 12 周课表
   xxt hw                        # 待交作业截止看板（本学期）
+  xxt hw --course 数字信号        # 只看一门课的作业
   xxt exam / notice / progress  # 考试 / 通知 / 任务点
+  xxt chapters 数字信号处理       # 章节任务点明细（哪章还没刷完）
   xxt materials 数字信号处理 --find 实验
   xxt download 数字信号处理 --find 实验 --dir D:\\dst
   xxt ics -o 课表.ics
@@ -198,6 +201,13 @@ def cmd_courses(a) -> int:
     _login_or_die(cli)
     names = _active_names(_term_schedule(cli))
     rows = cli.fetch_courses()
+    if a.json:
+        _print_json([
+            {"name": c["name"], "teacher": c.get("teacher") or "",
+             "courseid": c["courseid"], "clazzid": c["clazzid"],
+             "active": c["name"] in names}
+            for c in rows])
+        return 0
     print(_c(f"共 {len(rows)} 门课（★=本学期课表内）", "dim"))
     has_teacher = any(c.get("teacher") for c in rows)
     for c in rows:
@@ -238,28 +248,15 @@ def _day_rows(lessons, times, monday: dt.date):
 
 def cmd_today(a) -> int:
     sc = _cached_schedule(max_age_h=24)
-    cached = sc is not None
-    if not cached:   # 缓存缺失/过期才走网络（回退路径）
+    if sc is None:   # 缓存缺失/过期才走网络（回退路径）
         cli = _client()
         _login_or_die(cli)
         sc = cli.fetch_schedule()
-    cur = sc.get("curriculum", {})
-    from .client import ms_to_date, expand_weeks
-    fw = cur.get("firstWeekDate")
     today = dt.date.today()
-    if cached:
-        # 全学期缓存：按今天日期推教学周（realCurrentWeek 是存盘时的值），
-        # 再按 weeks 串筛出本周的课——全程零网络
-        week = _current_week(sc, today)
-    else:
-        week = int(cur.get("realCurrentWeek") or cur.get("currentWeek") or 0)
-    lessons = [l for l in sc.get("lessons", [])
-               if not l.get("weeks") or week in expand_weeks(l["weeks"])]
-    monday = ms_to_date(int(fw)) + dt.timedelta(days=(week - 1) * 7) if fw \
-        else today - dt.timedelta(days=today.weekday())
-    times = _lesson_times(sc)
-    rows = [r for r in _day_rows(lessons, times, monday)
-            if r[1].date() == today]
+    # 全学期缓存按日期推教学周（realCurrentWeek 是存盘时的值会过期）；
+    # 单周回退格式在 _current_week 内部回退到服务端周数
+    week = _current_week(sc, today)
+    rows = _today_rows(sc)
     if a.json:
         now = dt.datetime.now()
         _print_json([
@@ -280,6 +277,96 @@ def cmd_today(a) -> int:
         state = _c("进行中", "green") if s <= now <= e else (
             _c("已结束", "gray") if e < now else "")
         print(_row([f"{s:%H:%M}-{e:%H:%M}", _clip(name, 28), loc, tea], widths), state)
+    return 0
+
+
+def _today_rows(sc: dict):
+    """今天的课行（_day_rows 同构），供 today/next 复用。"""
+    from .client import ms_to_date, expand_weeks
+    cur = sc.get("curriculum", {})
+    today = dt.date.today()
+    week = _current_week(sc, today)
+    lessons = [l for l in sc.get("lessons", [])
+               if not l.get("weeks") or week in expand_weeks(l["weeks"])]
+    fw = cur.get("firstWeekDate")
+    monday = ms_to_date(int(fw)) + dt.timedelta(days=(week - 1) * 7) if fw \
+        else today - dt.timedelta(days=today.weekday())
+    times = _lesson_times(sc)
+    return [r for r in _day_rows(lessons, times, monday)
+            if r[1].date() == today]
+
+
+def _fmt_countdown(minutes: int) -> str:
+    """分钟数 → 人话倒计时（89→"1 小时 29 分"）。"""
+    if minutes < 60:
+        return f"{minutes} 分钟"
+    if minutes < 1440:
+        h, m = divmod(minutes, 60)
+        return f"{h} 小时 {m} 分" if m else f"{h} 小时"
+    d, m = divmod(minutes, 1440)
+    h = m // 60
+    return f"{d} 天 {h} 小时" if h else f"{d} 天"
+
+
+def _next_lesson(sc: dict, now: dt.datetime, horizon_days: int = 14):
+    """从现在起 14 天内的下一节课（跨天跨周；全学期缓存零网络）。
+
+    返回 (days_ahead, start, end, name, location, teacher) 或 None。
+    """
+    from .client import ms_to_date, expand_weeks
+    cur = sc.get("curriculum", {})
+    today = now.date()
+    base_week = _current_week(sc, today)
+    if base_week < 1:
+        return None
+    fw = cur.get("firstWeekDate")
+    times = _lesson_times(sc)
+    for off in range(0, horizon_days + 1):
+        day = today + dt.timedelta(days=off)
+        week = base_week + (off + today.weekday()) // 7
+        monday = ms_to_date(int(fw)) + dt.timedelta(days=(week - 1) * 7) \
+            if fw else day - dt.timedelta(days=day.weekday())
+        lessons = [l for l in sc.get("lessons", [])
+                   if not l.get("weeks") or week in expand_weeks(l["weeks"])]
+        rows = [r for r in _day_rows(lessons, times, monday)
+                if r[1].date() == day and r[1] > now]
+        if rows:
+            _, s, e, name, loc, tea = rows[0]
+            return off, s, e, name, loc, tea
+    return None
+
+
+def cmd_next(a) -> int:
+    sc = _cached_schedule(max_age_h=24)
+    if sc is None:
+        cli = _client()
+        _login_or_die(cli)
+        sc = cli.fetch_schedule()   # 单周格式也能看今天/明天
+    now = dt.datetime.now()
+    hit = _next_lesson(sc, now)
+    if a.json:
+        if not hit:
+            _print_json(None)
+            return 0
+        off, s, e, name, loc, tea = hit
+        _print_json({"name": name, "start": _jdt(s), "end": _jdt(e),
+                     "location": loc, "teacher": tea, "daysAhead": off,
+                     "minutesLeft": int((s - now).total_seconds() // 60)})
+        return 0
+    if not hit:
+        print(_c("未来两周没有课（假期/课表未排）✓", "green"))
+        return 0
+    off, s, e, name, loc, tea = hit
+    when = "今天" if off == 0 else ("明天" if off == 1 else f"{off} 天后")
+    wd = "一二三四五六日"[s.weekday()]
+    line = (f"{_c(name, 'bold')}  {s:%H:%M}-{e:%H:%M}"
+            f"（{when} 周{wd} {s:%m/%d}）")
+    tail = " · ".join(x for x in (loc, tea) if x)
+    if tail:
+        line += f" · {tail}"
+    print(line)
+    print("还有 " + _c(_fmt_countdown(
+        int((s - now).total_seconds() // 60)), "cyan"))
     return 0
 
 
@@ -307,6 +394,12 @@ def cmd_week(a) -> int:
     lessons = [l for l in sc.get("lessons", [])
                if not l.get("weeks") or week in expand_weeks(l["weeks"])]
     rows = _day_rows(lessons, times, monday)
+    if a.json:
+        _print_json([
+            {"date": f"{s:%Y-%m-%d}", "start": f"{s:%H:%M}", "end": f"{e:%H:%M}",
+             "name": name, "location": loc, "teacher": tea}
+            for _, s, e, name, loc, tea in rows])
+        return 0
     print(_c(f"第 {week} 教学周", "bold"),
           _c(f"{monday:%m/%d} – {monday + dt.timedelta(days=6):%m/%d}", "cyan"))
     if not rows:
@@ -330,6 +423,9 @@ def cmd_hw(a) -> int:
     _login_or_die(cli)
     names = _active_names(_term_schedule(cli)) if not a.all_courses else None
     rows = cli.fetch_deadline_overview(only_courses=names)
+    if a.course:
+        kw = a.course.casefold()
+        rows = [r for r in rows if kw in str(r["course"]).casefold()]
     if a.json:
         _print_json([
             {"course": r["course"], "title": r["title"], "status": r["status"],
@@ -338,7 +434,8 @@ def cmd_hw(a) -> int:
             for r in rows])
         return 0
     if not rows:
-        print(_c("没有待交的作业 ✓", "green"))
+        what = f"「{a.course}」" if a.course else ""
+        print(_c(f"没有待交的作业 {what}✓", "green"))
         return 0
     now = dt.datetime.now()
     widths = [16, 12, 22, 40]
@@ -422,6 +519,20 @@ def cmd_notice(a) -> int:
         t = str(it.get("sendTime") or "")[:16]
         print(f"{head} {title}")
         print(_c(f"   {sender} · {t}", "dim"))
+        if a.full:
+            body = (it.get("content") or "").strip()
+            if body:
+                # 源正文常有成片空行（网页排版残留），压成单空行
+                out, prev_blank = [], False
+                for ln in body.splitlines():
+                    blank = not ln.strip()
+                    if blank and prev_blank:
+                        continue
+                    out.append(ln)
+                    prev_blank = blank
+                for ln in out:
+                    print(f"   {ln}".rstrip())
+                print()
     return 0
 
 
@@ -470,6 +581,9 @@ def cmd_materials(a) -> int:
     items = cli.fetch_materials_recursive(
         c, a.find or "", max_depth=a.depth) if a.find else \
         cli.fetch_materials(c)
+    if a.json:
+        _print_json(items)
+        return 0
     if not items:
         print(_c("（空）", "dim"))
         return 0
@@ -480,6 +594,65 @@ def cmd_materials(a) -> int:
         print(f"{icon} {it.get('name')}  {idtag}")
     print(_c("\n下载：xxt download 课程名 --id 编号（或 --find 关键词）",
              "dim"))
+    return 0
+
+
+def cmd_chapters(a) -> int:
+    """章节任务点明细——"这门课到底还剩哪几个视频没刷"。"""
+    cli = _client()
+    _login_or_die(cli)
+    c = cli.find_course(a.course)
+    if not c:
+        _stderr(f"未找到包含「{a.course}」的课程")
+        return 1
+    data = cli.fetch_chapters(c)
+    prog = data.get("progress")
+    nodes = data.get("nodes") or []
+    if a.json:
+        _print_json({
+            "course": c["name"],
+            "progress": ({"done": prog[0], "total": prog[1]}
+                         if prog else None),
+            "nodes": [{"level": lvl, "text": t} for lvl, t in nodes],
+        })
+        return 0
+    print(_c(c["name"], "bold"),
+          _c(f"任务点 {prog[0]}/{prog[1]}" if prog else "（无总进度）", "cyan"))
+    if prog:
+        n = 16
+        filled = round(prog[0] * n / max(prog[1], 1))
+        bar = _c("█" * filled, "green") + _c("░" * (n - filled), "gray")
+        left = prog[1] - prog[0]
+        tail = _c(f" 差 {left} 个", "red") if left else _c(" 全部完成 ✓", "green")
+        print(f"{bar}{tail}")
+    # --todo 只看没完成的：跳过"已完成"小节；一级章没小节待办时也不必出
+    todo_only = a.todo
+    shown = 0
+    for lvl, text in nodes:
+        pending = "待完成" in text
+        if todo_only:
+            if lvl == 0:
+                continue          # 汇总行不含状态，todo 模式只出待办小节
+            if not pending:
+                continue
+        if lvl == 0:
+            print(_c(text, "yellow"))
+        elif pending:
+            print(_c(text, "red"))
+        elif "已完成" in text:
+            if not todo_only:
+                print(_c(text, "dim"))
+        else:
+            if not todo_only:
+                print(text)
+        shown += 1
+    if not shown:
+        done_all = bool(prog) and prog[0] >= prog[1]
+        print(_c("没有待完成的任务点 ✓" if done_all else "（没有章节内容）",
+                 "green" if done_all else "dim"))
+    elif todo_only:
+        n_left = sum(1 for lvl, t in nodes if lvl == 1 and "待完成" in t)
+        print(_c(f"\n共 {n_left} 个小节有待完成任务点", "dim"))
     return 0
 
 
@@ -559,6 +732,9 @@ def cmd_pan(a) -> int:
     cli = _client()
     _login_or_die(cli)
     d = cli.fetch_pan_files(a.folder)
+    if a.json:
+        _print_json(d)
+        return 0
     rows = d.get("items") if isinstance(d, dict) else d
     where = d.get("where", "?") if isinstance(d, dict) else "?"
     print(_c(f"{where}（{len(rows or [])} 项）", "dim"))
@@ -610,13 +786,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_today)
 
+    s = sub.add_parser("next", help="下一节课（含倒计时，最多看 14 天）")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
+    s.set_defaults(fn=cmd_next)
+
     s = sub.add_parser("week", help="整周课表")
     s.add_argument("week", nargs="?", type=int, help="周数（缺省本周）")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_week)
 
     s = sub.add_parser("hw", help="待交作业截止看板（本学期）")
     s.add_argument("--all-courses", action="store_true",
                    help="不过滤往年课（默认只看本学期）")
+    s.add_argument("--course", default="",
+                   help="只看课名包含关键词的作业")
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_hw)
 
@@ -627,6 +810,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("notice", help="通知中心")
     s.add_argument("--unread", action="store_true", help="只看未读")
+    s.add_argument("--full", action="store_true", help="显示通知正文")
     s.add_argument("--limit", type=int, default=20)
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_notice)
@@ -636,10 +820,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_progress)
 
+    s = sub.add_parser("chapters", help="章节任务点明细（哪章还没刷完）")
+    s.add_argument("course", help="课名关键词")
+    s.add_argument("--todo", action="store_true",
+                   help="只看有待任务点的小节")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
+    s.set_defaults(fn=cmd_chapters)
+
     s = sub.add_parser("materials", help="课程资料区")
     s.add_argument("course", help="课名关键词")
     s.add_argument("--find", default="", help="递归搜索关键词")
     s.add_argument("--depth", type=int, default=3)
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_materials)
 
     s = sub.add_parser("download", help="下载资料（只读下载，不改数据）")
@@ -652,6 +844,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("pan", help="个人云盘")
     s.add_argument("folder", nargs="?", default="", help="文件夹 id（留空根目录）")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_pan)
 
     s = sub.add_parser("ics", help="导出全学期课表 .ics")
