@@ -841,14 +841,18 @@ _mutex_handle = None
 
 def _grab_mutex() -> bool:
     """Windows 命名互斥量做单例仲裁。QLocalServer 的具名管道允许多实例
-    listen 同名（双冷启动实测两个都返回 True），锁不住。"""
+    listen 同名（双冷启动实测两个都返回 True），锁不住。
+
+    坑：ctypes 里跨调用读 kernel32.GetLastError() 会拿到被中间调用
+    覆盖的陈旧值（双击 bat 双冷启动实测双双漏过）——必须
+    use_last_error=True + ctypes.get_last_error() 紧跟原生调用。
+    """
     global _mutex_handle
     import ctypes
     ERROR_ALREADY_EXISTS = 183
-    _mutex_handle = ctypes.windll.kernel32.CreateMutexW(
-        None, False, f"Global\\{LOCK_NAME}")
-    return not (_mutex_handle
-                and ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _mutex_handle = k32.CreateMutexW(None, False, f"Global\\{LOCK_NAME}")
+    return not (_mutex_handle and ctypes.get_last_error() == ERROR_ALREADY_EXISTS)
 
 
 def main() -> int:
