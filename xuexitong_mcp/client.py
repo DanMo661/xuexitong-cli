@@ -564,13 +564,17 @@ class ChaoxingClient:
         注意必须先扫精确、再扫包含：若单循环无 break 一路扫到底，
         best 会被后面的命中覆盖，多门课同名时返回最后一门而非第一门
         （旧版单文件版就带着这个 bug，v1.1.0 修复）。
+        空串/纯空白直接返回 None——空串包含匹配永真会静默选中第一门课。
         """
+        kw = str(keyword or "").strip()
+        if not kw:
+            return None
         courses = self.fetch_courses()
         for c in courses:
-            if keyword == c["name"]:
+            if kw == c["name"]:
                 return c
         for c in courses:
-            if keyword in c["name"]:
+            if kw in c["name"]:
                 return c
         return None
 

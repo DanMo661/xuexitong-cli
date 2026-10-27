@@ -301,7 +301,8 @@ def cmd_courses(a) -> int:
         line = f"{tag} {_pad(_clip(c['name'], 32), 34)}"
         if has_teacher:
             line += _pad(_clip(c.get("teacher") or "", 16), 16)
-        line += _c(f"{c['courseid']}/{c['clazzid']}", "dim")
+        # 固定空格分隔：teacher 恰好填满 16 宽时 _pad 补 0 空格会与 ID 粘连
+        line += " " + _c(f"{c['courseid']}/{c['clazzid']}", "dim")
         print(line)
     return 0
 
@@ -517,6 +518,10 @@ def cmd_week(a) -> int:
 
 
 def cmd_hw(a) -> int:
+    if a.course is not None and not a.course.strip():
+        # 空串若静默放行=意图收窄却被扩成全学期逐课扫描；先于登录探测
+        _stderr("--course 关键词不能为空")
+        return 1
     cli = _client()
     _login_or_die(cli)
     names = _active_names(_term_schedule(cli)) if not a.all_courses else None
@@ -616,7 +621,19 @@ def cmd_hw_ls(a) -> int:
         hint = f"（--clazzid {a.clazzid} 也不匹配）" if a.clazzid else ""
         _stderr(f"未找到包含「{a.course}」的课程{hint}")
         return 1
-    data = cli.fetch_homework(c)
+    try:
+        data = cli.fetch_homework(c)
+    except RuntimeError as e:
+        if "workEnc" in str(e) and a.clazzid:
+            # 用户已选班仍失败：别再建议"加 --clazzid"，直接给出同名其他班号
+            others = [str(x["clazzid"]) for x in cli.fetch_courses()
+                      if x["name"] == c["name"]
+                      and str(x["clazzid"]) != a.clazzid]
+            hint = (f"；同名班还有：{'、'.join(others)}"
+                    if others else "")
+            _stderr(f"班 {a.clazzid} 未生成作业签名（可能未开放作业功能）{hint}")
+            return 1
+        raise
     items = data.get("items") or []
     if a.json:
         prog = data.get("progress")
@@ -1152,10 +1169,12 @@ def main(argv=None) -> int:
     _setup_console()
     args = build_parser().parse_args(argv)
     # 管道消费自动 JSON（对标 tamnd/bili-cli：非 TTY 默认机器格式）；
-    # XXT_TABLE=1 可强制表格。带 --json 的命令才翻转。
+    # XXT_TABLE=1 可强制表格。带 --json 的命令才翻转；显式 --grid
+    # 的用户明确要网格，隐式管道行为不得覆盖显式 flag。
     import os
     if (not sys.stdout.isatty() and hasattr(args, "json")
-            and os.environ.get("XXT_TABLE") is None):
+            and os.environ.get("XXT_TABLE") is None
+            and not getattr(args, "grid", False)):
         args.json = True
     try:
         return args.fn(args)
