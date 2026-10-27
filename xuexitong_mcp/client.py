@@ -1008,7 +1008,10 @@ class ChaoxingClient:
         kw = (keyword or "").strip()
 
         def match(it: dict) -> bool:
-            if unread_only and it.get("isread"):
+            # isread 是 '0'/'1' 字符串（'0'=未读）——裸真值判断会把未读
+            # '0' 当真值全部滤掉（--unread 几乎必空；assistant/CLI 侧早已
+            # str 化比较，这里补齐同一约定）
+            if unread_only and str(it.get("isread", "1")) != "0":
                 return False
             if kw and kw not in ((it.get("title") or "") + (it.get("content") or "")):
                 return False

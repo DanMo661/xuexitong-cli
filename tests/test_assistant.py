@@ -577,6 +577,135 @@ def test_cli_today_rows_zero_network_shape():
     assert all(r[1] <= r[2] for r in rows)
 
 
+def test_cli_hw_ls_lines_render():
+    """hw-ls 行渲染：序号/截断标题/状态列（空状态→未知，超长截断）。"""
+    from xuexitong_mcp import cli as xxt
+    old = xxt._COLOR
+    xxt._COLOR = False                        # 关色码，断言纯文本
+    try:
+        data = {"progress": (3, 5), "items": [
+            {"index": 1, "title": "实验一 信号采样", "status": "已完成", "url": ""},
+            {"index": 2, "title": "实验二 频谱分析", "status": "未提交", "url": ""},
+            {"index": 3, "title": "实验三 滤波器设计", "status": "", "url": ""},
+            {"index": 4, "title": "超长作业标题" * 20, "status": "待批阅", "url": ""},
+        ]}
+        lines = xxt._hw_ls_lines(data)
+        assert len(lines) == 5 and lines[0].startswith("序号")
+        assert lines[1].startswith("1") and "实验一 信号采样" in lines[1]
+        assert "已完成" in lines[1]
+        assert lines[2].startswith("2") and "未提交" in lines[2]
+        assert "未知" in lines[3]            # 空状态显示"未知"
+        assert "…" in lines[4] and "待批阅" in lines[4]   # 超长标题截断
+        # 列对齐：各行状态列的显示列位置与表头一致（防 rstrip 吃掉标题列填充）
+        for ln, st in ((lines[1], "已完成"), (lines[2], "未提交")):
+            assert xxt._w(ln[:ln.index(st)]) == \
+                xxt._w(lines[0][:lines[0].index("状态")])
+        # 空列表只有表头
+        assert len(xxt._hw_ls_lines({"progress": None, "items": []})) == 1
+    finally:
+        xxt._COLOR = old
+
+
+def test_cli_hw_status_style():
+    from xuexitong_mcp import cli as xxt
+    assert xxt._hw_status_style("已完成") == ("已完成", "green")
+    assert xxt._hw_status_style("待批阅") == ("待批阅", "green")
+    assert xxt._hw_status_style("未提交") == ("未提交", "yellow")
+    assert xxt._hw_status_style("已截止") == ("已截止", "red")
+    assert xxt._hw_status_style("") == ("未知", "gray")
+    assert xxt._hw_status_style(None) == ("未知", "gray")
+
+
+def test_cli_hw_info_lines():
+    """hw-info 键值渲染：缺字段→"—"，双边时间拼"至"、单边不拼。"""
+    from xuexitong_mcp import cli as xxt
+    old = xxt._COLOR
+    xxt._COLOR = False
+    try:
+        d = {"index": 2, "status": "已完成", "title": "实验4 整体调试实验报告",
+             "question_count": 1, "full_score": 100,
+             "start_time": "06-21 18:51", "deadline": "07-01 18:51",
+             "score": "68"}
+        lines = xxt._hw_info_lines(d)
+        join = "\n".join(lines)
+        assert len(lines) == 6
+        assert "实验4 整体调试实验报告" in join
+        assert "06-21 18:51 至 07-01 18:51" in join
+        assert "100" in join and "68" in join and "已完成" in join
+        # 全缺字段："—"、不拼"至"、空状态→"未知"
+        empty = xxt._hw_info_lines({"index": 1, "status": ""})
+        j2 = "\n".join(empty)
+        assert "—" in j2 and " 至 " not in j2 and "未知" in j2
+        # 只有开始时间：显示单边，不出现"至"
+        one = xxt._hw_info_lines({"start_time": "06-21 18:51"})
+        j3 = "\n".join(one)
+        assert "06-21 18:51" in j3 and " 至 " not in j3
+    finally:
+        xxt._COLOR = old
+
+
+def test_cli_parser_hw_ls_and_hw_info():
+    from xuexitong_mcp import cli as xxt
+    p = xxt.build_parser()
+    a = p.parse_args(["hw-ls", "数字信号处理"])
+    assert a.fn is xxt.cmd_hw_ls
+    assert a.course == "数字信号处理" and not a.json
+    a = p.parse_args(["hw-info", "数字信号处理", "3", "--json"])
+    assert a.fn is xxt.cmd_hw_info
+    assert a.course == "数字信号处理" and a.index == 3 and a.json is True
+
+
+def test_cli_parser_json_registered_everywhere():
+    """B1 回归：cmd_courses 读 a.json，parser 漏注册会跑完全部网络后崩。"""
+    from xuexitong_mcp import cli as xxt
+    p = xxt.build_parser()
+    for argv in [["courses", "--json"], ["whoami", "--json"],
+                 ["status", "--json"], ["today", "--json"],
+                 ["next", "--json"], ["week", "1", "--json"],
+                 ["hw", "--json"], ["hw-ls", "x", "--json"],
+                 ["hw-info", "x", "1", "--json"], ["exam", "--json"],
+                 ["notice", "--json"], ["progress", "--json"],
+                 ["chapters", "x", "--json"], ["materials", "x", "--json"],
+                 ["pan", "--json"]]:
+        a = p.parse_args(argv)
+        assert a.json is True, argv   # 漏注册这里直接 AttributeError
+    a = p.parse_args(["week", "2", "--grid"])
+    assert a.grid is True and a.week == 2
+    a = p.parse_args(["notice", "--kw", "考试"])
+    assert a.kw == "考试"
+    a = p.parse_args(["hw", "--course", "数图"])
+    assert a.course == "数图"
+
+
+def test_cli_notice_time_normalize():
+    from xuexitong_mcp import cli as xxt
+    # 标准字符串
+    assert xxt._notice_time({"sendTime": "2026-10-22 16:47:26"}) == \
+        "2026-10-22 16:47"
+    # 毫秒时间戳 int / 数字字符串（assistant 侧见过的两形态）
+    ms = 1761228446000   # 2025-10-23 前后，值不定但必须能转成日期串
+    for v in (ms, str(ms)):
+        out = xxt._notice_time({"sendTime": v})
+        assert len(out) == 16 and out[4] == "-" and out[10] == " ", v
+    # 空值
+    assert xxt._notice_time({}) == ""
+
+
+def test_cli_weekgrid_module_pure():
+    """B 线模块契约：color=None 纯文本、CJK 列对齐、空态。"""
+    from xuexitong_mcp.weekgrid import render_week_grid
+    rows = [(1, datetime(2026, 10, 26, 8, 0), datetime(2026, 10, 26, 9, 50),
+             "数字信号处理", "教三楼405", "张三")]
+    text = render_week_grid(rows, week=9,
+                            monday=datetime(2026, 10, 26).date(),
+                            today=datetime(2026, 10, 26).date(), color=None)
+    assert "\x1b[" not in text          # color=None 无 ANSI 码
+    # 7 列下列宽 ~11：6 字课名会截断，断言前缀即可
+    assert "数字信号" in text and "…" in text
+    assert "08:00" in text
+    assert render_week_grid([], color=None)  # 空态不炸
+
+
 # ----------------------------------------------------------------
 
 def run_all() -> int:

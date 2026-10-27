@@ -162,13 +162,17 @@ python -m venv .venv
 同一红线：不做签到/刷课/答题/提交。
 
 ```bash
+xxt status                    # 本机状态（缓存年龄/凭据/学期锚点，零网络；--probe 真探测）
 xxt today                     # 今天有什么课（含进行中/已结束状态）
 xxt next                      # 下一节课 + 人话倒计时（今天课上完自动找明天/下周，14 天范围）
 xxt week [12]                 # 本周 / 第 12 周课表（按天分组）
+xxt week --grid               # 终端课表网格图（7 列时间轨，今天列高亮）
 xxt hw                        # 待交作业截止看板（默认只看本学期）
-xxt hw --course 数字信号        # 只看一门课的作业
+xxt hw --course 数字信号        # 只看一门课的作业（课程范围下推收窄，省请求）
+xxt hw-ls 数字信号处理         # 单门课的作业列表（序号/名称/提交状态）
+xxt hw-info 数字信号处理 2     # 单份作业详情（题量/满分/作答起止/得分）
 xxt exam                      # 考试安排（默认只看本学期，--all 看全部）
-xxt notice [--unread]         # 通知中心（--full 展开正文）
+xxt notice [--unread] [--full]   # 通知中心（--full 展开正文，--kw 关键词过滤）
 xxt progress                  # 任务点进度（默认只看本学期）
 xxt chapters 数字信号处理       # 章节任务点明细树（--todo 只看没刷完的小节）
 xxt courses                   # 课程列表（★=本学期课表内，含任课老师）
@@ -181,12 +185,16 @@ xxt pan <文件夹id>            # 云盘下钻一层
 xxt ics -o 课表.ics           # 全学期课表导出日历
 ```
 
-- `today` / `next` 秒开：桌面助手课表缓存（`store.json` 的 `schedule_cache`）距
-  保存不足 24h 就直接用缓存，零网络立即返回；过期/缺失回退在线拉取
-  （教学周由学期锚点日期推导，不吃存盘时的"当前周"旧值）。`week`/`ics`
-  查任意周则一律缓存优先
-- `--json` **全部 14 个查询命令支持**：输出 UTF-8 JSON，时间统一
-  `YYYY-MM-DD HH:MM` 字符串，无表格/进度条/颜色码，方便脚本与 agent 消费
+- **请求节制是第一设计约束**（账号有 9010 反爬风控）：`today`/`next`/`week`/`ics`
+  课表缓存命中时零网络（连登录探测都不发）；CLI-only 用户冷拉一次全学期后自动
+  回写 `store.json` 缓存，之后同样零网络；`hw --course` 把课程范围下推到扫描层；
+  `download --id` 先查顶层再递归。教学周由学期锚点日期推导，不吃存盘旧值
+- **管道/重定向自动切 JSON**（对标 tamnd/bili-cli）：`xxt today | jq` 无需显式
+  `--json`；`XXT_TABLE=1` 强制表格。颜色认 `NO_COLOR` / `FORCE_COLOR`
+- **退出码语义化**：0 成功 / 1 一般错误 / 2 未登录 / 3 触发 9010 反爬 /
+  130 Ctrl+C——脚本与 agent 可精确分支
+- `--json` **全部查询命令支持**（含 whoami/courses/status）：输出 UTF-8
+  JSON，时间统一 `YYYY-MM-DD HH:MM` 字符串，无表格/进度条/颜色码
 - **下载 9010 反爬**：下载接口可能触发学习通人机验证（下载被 302 到
   antispider 页，报错会明确提示）。`xxt download` 在终端交互模式下会
   自动取验证码图存 `~\.xxt_captcha.png`、提示人工输入 4 位码后重试

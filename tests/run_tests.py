@@ -410,4 +410,11 @@ def run_all() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(1 if run_all() else 0)
+    rc = 1 if run_all() else 0
+    # 两个独立测试文件（assistant 侧 / weekgrid 侧）一并串跑
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    for extra in ("test_assistant.py", "test_weekgrid.py"):
+        r = subprocess.run([sys.executable, os.path.join(here, extra)])
+        rc = rc or r.returncode
+    sys.exit(rc)

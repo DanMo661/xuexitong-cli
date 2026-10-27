@@ -9,16 +9,22 @@
 纪律：只读查询 + 资料下载；不做签到/刷课/答题/提交（红线）。
 
 用法示例：
+  xxt status                    # 本机状态（缓存/凭据，零网络；--probe 真探测登录）
   xxt today                     # 今天有什么课
   xxt next                      # 下一节课（含倒计时，跨天跨周找）
-  xxt week 12                   # 第 12 周课表
+  xxt week 12 / week --grid     # 第 12 周课表 / 终端课表网格图
   xxt hw                        # 待交作业截止看板（本学期）
   xxt hw --course 数字信号        # 只看一门课的作业
-  xxt exam / notice / progress  # 考试 / 通知 / 任务点
+  xxt hw-ls 数字信号 / hw-info 数字信号 1  # 单门课作业列表 / 单份作业详情
+  xxt exam / notice / progress  # 考试 / 通知（--kw 关键词）/ 任务点
   xxt chapters 数字信号处理       # 章节任务点明细（哪章还没刷完）
   xxt materials 数字信号处理 --find 实验
   xxt download 数字信号处理 --find 实验 --dir D:\\dst
   xxt ics -o 课表.ics
+
+行为约定：管道/重定向时查询命令自动切 --json（XXT_TABLE=1 强制表格）；
+NO_COLOR/FORCE_COLOR 控制颜色；退出码 0 成功 / 1 一般错 / 2 未登录 /
+3 触发 9010 反爬 / 130 Ctrl+C。
 """
 from __future__ import annotations
 
@@ -89,6 +95,12 @@ def _setup_console() -> None:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+    # 颜色开关：NO_COLOR/FORCE_COLOR 标准环境变量（https://no-color.org）
+    import os
+    if os.environ.get("NO_COLOR"):
+        _COLOR = False
+    elif os.environ.get("FORCE_COLOR"):
+        _COLOR = True
 
 
 # ---------------------------------------------------------------- 公共数据
@@ -139,8 +151,28 @@ def _cached_schedule(max_age_h: float | None = None,
 
 
 def _term_schedule(cli) -> dict:
-    """全学期课表：优先缓存，否则现场拉（冷启动 20+ 请求，十几秒）。"""
-    return _cached_schedule() or cli.fetch_schedule_full()
+    """全学期课表：优先缓存，否则现场拉（冷启动 20+ 请求，十几秒）。
+
+    冷拉结果回写 store.json 的 schedule_cache——CLI-only 用户（没装桌面
+    助手）第二次起也是零网络；RMW 只动这一个键，失败静默（并发写竞态
+    不值得为它炸命令）。
+    """
+    sc = _cached_schedule()
+    if sc is not None:
+        return sc
+    sc = cli.fetch_schedule_full()
+    try:
+        store = Path(__file__).resolve().parent.parent / "store.json"
+        d = json.loads(store.read_text(encoding="utf-8")) \
+            if store.exists() else {}
+        sc["saved_at"] = dt.datetime.now().isoformat(timespec="seconds")
+        d["schedule_cache"] = sc
+        tmp = store.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(store)
+    except Exception:
+        pass
+    return sc
 
 
 def _active_names(sc: dict) -> set[str]:
@@ -190,9 +222,62 @@ def cmd_whoami(a) -> int:
     cli = _client()
     _login_or_die(cli)
     p = cli.fetch_profile()
+    if a.json:
+        _print_json({"name": p.get("name"), "school": p.get("school"),
+                     "uid": p.get("uid")})
+        return 0
     print(_row(["姓名", p.get("name", "?")], [8, 40]))
     print(_row(["学校", p.get("school", "?")], [8, 40]))
     print(_row(["uid", p.get("uid", "?")], [8, 40]))
+    return 0
+
+
+def cmd_status(a) -> int:
+    """本机状态一览：默认零网络（缓存年龄/凭据配置/学期锚点）。"""
+    root = Path(__file__).resolve().parent.parent
+    sc = _cached_schedule()
+    info: dict = {"root": str(root)}
+    info["config"] = (root / "config.json").exists()
+    ck = root / "session_cookies.json"
+    info["cookies"] = ck.exists()
+    if ck.exists():
+        try:
+            info["cookies_age_h"] = round(
+                (dt.datetime.now() - dt.datetime.fromtimestamp(ck.stat().st_mtime)).total_seconds() / 3600, 1)
+        except OSError:
+            pass
+    if sc:
+        today = dt.date.today()
+        info["schedule_cache"] = sc.get("saved_at")
+        info["week"] = _current_week(sc, today)
+        ts = _term_start(sc)
+        info["term_start"] = f"{ts:%Y-%m-%d}" if ts else None
+        info["lessons"] = len(sc.get("lessons") or [])
+    if a.probe:
+        cli = _client()
+        r = cli.ensure_login()
+        info["login_ok"] = bool(r.ok)
+        if r.ok:
+            p = cli.fetch_profile()
+            info["name"] = p.get("name")
+    if a.json:
+        _print_json(info)
+        return 0
+    print(_c("xuexitong-cli 状态", "bold"))
+    print(_row(["凭据 config.json", "已配置 ✓" if info["config"] else "缺失"], [18, 40]))
+    ck_s = "无（首次登录会生成）"
+    if info.get("cookies"):
+        ck_s = f"存在（{info.get('cookies_age_h', '?')} 小时前保存）"
+    print(_row(["会话 cookies", ck_s], [18, 40]))
+    if sc:
+        print(_row(["课表缓存", f"{info.get('lessons', 0)} 节课，存于 {info.get('schedule_cache')}"], [18, 40]))
+        print(_row(["当前教学周", f"第 {info.get('week', '?')} 周（学期始 {info.get('term_start')}）"], [18, 40]))
+    else:
+        print(_row(["课表缓存", "无（跑一次 today/week 自动建立）"], [18, 40]))
+    if "login_ok" in info:
+        print(_row(["登录探测", "OK：" + str(info.get("name")) if info["login_ok"] else "失败"], [18, 40]))
+    else:
+        print(_c("  （--probe 可真探测登录态，默认零网络）", "dim"))
     return 0
 
 
@@ -276,7 +361,8 @@ def cmd_today(a) -> int:
     for _, s, e, name, loc, tea in rows:
         state = _c("进行中", "green") if s <= now <= e else (
             _c("已结束", "gray") if e < now else "")
-        print(_row([f"{s:%H:%M}-{e:%H:%M}", _clip(name, 28), loc, tea], widths), state)
+        print(_row([f"{s:%H:%M}-{e:%H:%M}", _clip(name, 28),
+                    _clip(loc, 16), _clip(tea, 10)], widths), state)
     return 0
 
 
@@ -371,13 +457,16 @@ def cmd_next(a) -> int:
 
 
 def cmd_week(a) -> int:
-    cli = _client()
-    _login_or_die(cli)
-    sc = _term_schedule(cli)      # 缓存优先：任意周查询用全学期数据
+    # 缓存命中就不发登录探测（today/next 同款零网络路径）
+    sc = _cached_schedule()
+    if sc is None:
+        cli = _client()
+        _login_or_die(cli)
+        sc = _term_schedule(cli)   # 冷拉并回写缓存
     cur = sc.get("curriculum", {})
     from .client import ms_to_date
-    week = a.week or int(cur.get("realCurrentWeek")
-                         or cur.get("currentWeek") or 1)
+    # 缺省周与 today/next 同哲学：日期推导，不吃存盘时的 realCurrentWeek 旧值
+    week = a.week or _current_week(sc, dt.date.today()) or 1
     maxw = int(cur.get("maxWeek") or 0)
     if a.week is not None and a.week < 1:
         _stderr("周数从 1 开始")
@@ -400,6 +489,11 @@ def cmd_week(a) -> int:
              "name": name, "location": loc, "teacher": tea}
             for _, s, e, name, loc, tea in rows])
         return 0
+    if a.grid:
+        from .weekgrid import render_week_grid
+        print(render_week_grid(rows, week=week, monday=monday,
+                               today=dt.date.today(), color=_c))
+        return 0
     print(_c(f"第 {week} 教学周", "bold"),
           _c(f"{monday:%m/%d} – {monday + dt.timedelta(days=6):%m/%d}", "cyan"))
     if not rows:
@@ -414,7 +508,7 @@ def cmd_week(a) -> int:
             print(_c(f"周{wd} {day:%m/%d}", "yellow"), mark)
             last_dow = dow
         print(f"  {s:%H:%M}-{e:%H:%M}  {_pad(_clip(name, 24), 24)}"
-              f"{_pad(loc, 16)}{tea}")
+              f"{_pad(_clip(loc, 14), 14)}{tea}")
     return 0
 
 
@@ -422,6 +516,16 @@ def cmd_hw(a) -> int:
     cli = _client()
     _login_or_die(cli)
     names = _active_names(_term_schedule(cli)) if not a.all_courses else None
+    if a.course and names is not None:
+        # --course 下推到 only_courses：只扫匹配的课，别为看一门课付全学期
+        # 的逐课作业请求（数字信号 → 含它的课名集合，复用双向包含的语义
+        # 就交给客户端 only_courses 的包含匹配）
+        kw = a.course.casefold()
+        names = {n for n in names if kw in n.casefold()} or None
+        if names is None:
+            _stderr(f"本学期课表里没有包含「{a.course}」的课"
+                    f"（--all-courses 可看全部课）")
+            return 1
     rows = cli.fetch_deadline_overview(only_courses=names)
     if a.course:
         kw = a.course.casefold()
@@ -459,6 +563,109 @@ def cmd_hw(a) -> int:
     return 0
 
 
+def _hw_status_style(status: str) -> tuple[str, str]:
+    """作业状态 → (显示文本, 颜色)：空=未知(灰)；已交(已完成/待批阅)=绿；
+    未交=黄；已截止(未交)=红。"""
+    from .client import is_homework_pending
+    s = (status or "").strip()
+    if not s:
+        return "未知", "gray"
+    if not is_homework_pending(s):
+        return s, "green"
+    return (s, "red") if "已截止" in s else (s, "yellow")
+
+
+def _hw_ls_lines(data: dict) -> list[str]:
+    """作业列表数据 → 表格行（表头 + 每份一行：序号/作业/状态）。纯渲染零网络。"""
+    widths = [4, 36, 10]
+    lines = [_row(["序号", "作业", "状态"], widths)]
+    for it in data.get("items") or []:
+        st, color = _hw_status_style(it.get("status"))
+        lines.append((_pad(str(it.get("index") or "?"), widths[0])
+                      + "  " + _pad(_clip(it.get("title") or "?", widths[1]),
+                                    widths[1])
+                      + "  " + _c(_pad(st, widths[2]), color)).rstrip())
+    return lines
+
+
+def cmd_hw_ls(a) -> int:
+    cli = _client()
+    _login_or_die(cli)
+    c = cli.find_course(a.course)
+    if not c:
+        _stderr(f"未找到包含「{a.course}」的课程")
+        return 1
+    data = cli.fetch_homework(c)
+    items = data.get("items") or []
+    if a.json:
+        prog = data.get("progress")
+        _print_json({
+            "course": c["name"],
+            "progress": {"done": prog[0], "total": prog[1]} if prog else None,
+            "items": [{"index": it["index"], "title": it["title"],
+                       "status": it["status"] or "", "url": it["url"] or ""}
+                      for it in items]})
+        return 0
+    head = f"作业 {len(items)} 份"
+    if data.get("progress"):
+        head += f"（进度 {data['progress'][0]}/{data['progress'][1]}）"
+    print(_c(c["name"], "bold"), _c(head, "cyan"))
+    if not items:
+        print(_c("（没有作业）", "dim"))
+        return 0
+    for line in _hw_ls_lines(data):
+        print(line)
+    print(_c("\n详情：xxt hw-info 课程名 序号", "dim"))
+    return 0
+
+
+def _hw_info_lines(d: dict) -> list[str]:
+    """作业详情 dict → 键值展示行（缺字段 → "—"；时间单边不拼"至"）。纯渲染零网络。"""
+    def v(key):
+        s = d.get(key)
+        return str(s) if s not in (None, "") else "—"
+    st, color = _hw_status_style(d.get("status"))
+    start, end = d.get("start_time"), d.get("deadline")
+    span = f"{start} 至 {end}" if start and end else (start or end or "—")
+    rows = [
+        ("作业", _clip(v("title"), 56)),
+        ("状态", _c(st, color)),
+        ("题量", v("question_count")),
+        ("满分", v("full_score")),
+        ("作答时间", span),
+        ("得分", v("score")),
+    ]
+    return [_row([k, val], [10, 44]) for k, val in rows]
+
+
+def cmd_hw_info(a) -> int:
+    cli = _client()
+    _login_or_die(cli)
+    if a.index < 1:
+        _stderr("序号从 1 开始")
+        return 1
+    c = cli.find_course(a.course)
+    if not c:
+        _stderr(f"未找到包含「{a.course}」的课程")
+        return 1
+    try:
+        d = cli.fetch_homework_detail(c, a.index)
+    except IndexError as e:
+        _stderr(str(e))
+        return 1
+    if a.json:
+        _print_json({
+            "course": c["name"], "index": d["index"], "status": d["status"],
+            "title": d.get("title"), "questionCount": d.get("question_count"),
+            "fullScore": d.get("full_score"), "startTime": d.get("start_time"),
+            "deadline": d.get("deadline"), "score": d.get("score")})
+        return 0
+    print(_c(c["name"], "bold"), _c(f"第 {d['index']} 份作业", "cyan"))
+    for line in _hw_info_lines(d):
+        print(line)
+    return 0
+
+
 def cmd_exam(a) -> int:
     cli = _client()
     _login_or_die(cli)
@@ -478,6 +685,10 @@ def cmd_exam(a) -> int:
     if start and not a.all:
         print(_c(f"（只显示 {start:%Y-%m-%d} 开学后的考试；--all 看全部）",
                  "dim"))
+    elif not start and not a.all:
+        # 无课表缓存 → 学期过滤静默失效，明说（跑一次 today/week 会建缓存）
+        print(_c("（无课表缓存，学期过滤未生效，往年考试也在内；"
+                 "先跑一次 xxt today 建缓存）", "dim"))
     if not rows:
         print(_c("没有考试安排", "green"))
         return 0
@@ -492,33 +703,48 @@ def cmd_exam(a) -> int:
     return 0
 
 
+def _notice_time(it) -> str:
+    """sendTime 三形态归一 → "YYYY-MM-DD HH:MM"：
+    标准字符串 / 毫秒时间戳（int）/ 数字字符串（assistant 侧同款防御）。"""
+    v = it.get("sendTime")
+    s = str(v or "")
+    if s.isdigit() and len(s) >= 13:
+        try:
+            return dt.datetime.fromtimestamp(int(s) / 1000).strftime(
+                "%Y-%m-%d %H:%M")
+        except (OverflowError, OSError, ValueError):
+            return s
+    return s[:16]
+
+
 def cmd_notice(a) -> int:
     cli = _client()
     _login_or_die(cli)
     if a.limit < 1:
         _stderr("--limit 至少为 1")
         return 1
-    items = cli.fetch_notices(limit=a.limit, unread_only=a.unread)
+    items = cli.fetch_notices(limit=a.limit, unread_only=a.unread,
+                              keyword=a.kw or "")
     if a.json:
         _print_json([
             {"title": (it.get("title") or "").strip(),
              "sender": it.get("createrName") or it.get("sender") or "",
-             "time": str(it.get("sendTime") or "")[:19],
+             "time": _notice_time(it),
              "unread": str(it.get("isread", "1")) == "0",
              "content": it.get("content") or ""}
             for it in items])
         return 0
     if not items:
-        print(_c("没有通知", "green"))
+        what = f"含「{a.kw}」的" if a.kw else ""
+        print(_c(f"没有{what}通知", "green"))
         return 0
     for it in items:
         unread = str(it.get("isread", "1")) == "0"
         head = _c("●", "cyan") if unread else _c("·", "gray")
         title = (it.get("title") or "").strip()
         sender = it.get("createrName") or it.get("sender") or ""
-        t = str(it.get("sendTime") or "")[:16]
         print(f"{head} {title}")
-        print(_c(f"   {sender} · {t}", "dim"))
+        print(_c(f"   {sender} · {_notice_time(it)}", "dim"))
         if a.full:
             body = (it.get("content") or "").strip()
             if body:
@@ -541,12 +767,13 @@ def cmd_progress(a) -> int:
     _login_or_die(cli)
     names = _active_names(_term_schedule(cli)) if not a.all_courses else None
     rows = cli.fetch_progress_overview(only_courses=names)
-    # 同课两班去重（保更完整一行）
+    # 同课两班去重：total 优先（10/10 已完成的班不该压掉 3/20 还差 17 个的班，
+    # 旧键序 done 优先会让这门课从待办看板整个消失）
     best: dict[str, dict] = {}
     for r in rows:
         old = best.get(r["course"])
-        if old is None or ((r.get("done") or -1), (r.get("total") or -1)) > \
-                ((old.get("done") or -1), (old.get("total") or -1)):
+        if old is None or ((r.get("total") or -1), (r.get("done") or -1)) > \
+                ((old.get("total") or -1), (old.get("done") or -1)):
             best[r["course"]] = r
     todo = [(n, r) for n, r in best.items()
             if r.get("total") and r["total"] > (r.get("done") or 0)]
@@ -711,12 +938,20 @@ def cmd_download(a) -> int:
         _stderr("要 --id 编号或 --find 关键词（先 xxt materials 看看）")
         return 1
     hit = None
-    items = cli.fetch_materials_recursive(c, a.find or "", max_depth=4)
-    for it in items:
-        if (a.id and it.get("data_id") == a.id) or \
-           (not a.id and a.find and a.find in it.get("name", "")):
-            hit = it
-            break
+    # --id 时先查顶层（1 个请求就够），没有再递归下钻——一律 DFS 会为
+    # 顶层文件白付整棵资料树的请求，还受 50 条命中封顶牵连
+    if a.id:
+        for it in cli.fetch_materials(c):
+            if it.get("data_id") == a.id:
+                hit = it
+                break
+    if hit is None:
+        items = cli.fetch_materials_recursive(c, a.find or "", max_depth=4)
+        for it in items:
+            if (a.id and it.get("data_id") == a.id) or \
+               (not a.id and a.find and a.find in it.get("name", "")):
+                hit = it
+                break
     if not hit:
         _stderr("没找到匹配的文件（先 xxt materials 看看）")
         return 1
@@ -751,11 +986,13 @@ def cmd_pan(a) -> int:
 
 def cmd_ics(a) -> int:
     # 直接用 client.build_ics + 课表缓存：import server 会连带 FastMCP
-    # （CLI 零依赖承诺），且缓存命中时省 20+ 请求
-    cli = _client()
-    _login_or_die(cli)
+    # （CLI 零依赖承诺），且缓存命中时省 20+ 请求（含登录探测）
     from .client import build_ics
-    sc = _term_schedule(cli)
+    sc = _cached_schedule()
+    if sc is None:
+        cli = _client()
+        _login_or_die(cli)
+        sc = _term_schedule(cli)
     ics = build_ics(sc.get("lessons", []), sc.get("curriculum", {}),
                     cal_name=f"课表-{sc.get('curriculum', {}).get('schoolYear', '')}")
     path = Path(a.output).resolve()
@@ -768,18 +1005,36 @@ def cmd_ics(a) -> int:
 
 # ---------------------------------------------------------------- 装配
 
+def _cli_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("xuexitong-cli")
+    except Exception:
+        return "2.0.0"
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="xxt", description="学习通命令行（只读）",
         epilog="凭据：与 MCP/桌面助手共用的 config.json"
                "（包安装目录旁）或 CHAOXING_PHONE/CHAOXING_PASSWORD 环境变量。",
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version",
+                   version=f"xuexitong-cli {_cli_version()}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("whoami", help="我是谁（姓名/学校/uid）")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_whoami)
 
+    s = sub.add_parser("status", help="本机状态（缓存/登录凭据，默认零网络）")
+    s.add_argument("--probe", action="store_true",
+                   help="真探测一次登录态（1~2 个请求）")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
+    s.set_defaults(fn=cmd_status)
+
     s = sub.add_parser("courses", help="课程列表（★=本学期）")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_courses)
 
     s = sub.add_parser("today", help="今天的课")
@@ -792,6 +1047,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("week", help="整周课表")
     s.add_argument("week", nargs="?", type=int, help="周数（缺省本周）")
+    s.add_argument("--grid", action="store_true", help="终端课表网格图")
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_week)
 
@@ -803,6 +1059,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_hw)
 
+    s = sub.add_parser("hw-ls", help="单门课的作业列表")
+    s.add_argument("course", help="课名关键词")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
+    s.set_defaults(fn=cmd_hw_ls)
+
+    s = sub.add_parser("hw-info", help="单份作业详情（题量/满分/时间/得分）")
+    s.add_argument("course", help="课名关键词")
+    s.add_argument("index", type=int, help="作业序号（hw-ls 输出里的序号）")
+    s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
+    s.set_defaults(fn=cmd_hw_info)
+
     s = sub.add_parser("exam", help="考试安排（本学期）")
     s.add_argument("--all", action="store_true", help="显示全部（含往年）")
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
@@ -811,6 +1078,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("notice", help="通知中心")
     s.add_argument("--unread", action="store_true", help="只看未读")
     s.add_argument("--full", action="store_true", help="显示通知正文")
+    s.add_argument("--kw", default="", help="按关键词过滤（标题+正文）")
     s.add_argument("--limit", type=int, default=20)
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_notice)
@@ -856,6 +1124,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     _setup_console()
     args = build_parser().parse_args(argv)
+    # 管道消费自动 JSON（对标 tamnd/bili-cli：非 TTY 默认机器格式）；
+    # XXT_TABLE=1 可强制表格。带 --json 的命令才翻转。
+    import os
+    if (not sys.stdout.isatty() and hasattr(args, "json")
+            and os.environ.get("XXT_TABLE") is None):
+        args.json = True
     try:
         return args.fn(args)
     except KeyboardInterrupt:
@@ -865,7 +1139,9 @@ def main(argv=None) -> int:
         raise
     except Exception as e:  # noqa: BLE001
         print(_c(f"出错了：{e}", "red"), file=sys.stderr)
-        return 1
+        # 退出码语义：0 成功 / 1 一般错误 / 2 未登录 / 3 触发 9010 反爬
+        # / 130 Ctrl+C——脚本和 agent 可精确分支
+        return 3 if "9010" in str(e) else 1
 
 
 if __name__ == "__main__":
