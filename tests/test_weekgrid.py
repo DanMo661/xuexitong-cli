@@ -37,8 +37,9 @@ def test_basic_render_exact():
                         "  周四 10/29  周五 10/30  周六 10/31  周日 11/01")
     assert lines[1] == "08:00" + " " * 14 + "大学英语"
     assert lines[2] == " " * 19 + "外语楼B201"
-    # 时间轨至少 5 行：剩余 4 行是空轨道行
-    assert lines[3:] == ["", "", "", ""]
+    # 时间轨最少 3 行（MIN_RAIL_ROWS=3）：剩余 2 行是空轨道行（nitpick：
+    # 垫 5 行会出无内容空行尾巴）
+    assert lines[3:] == ["", ""]
     assert all(ln == ln.rstrip() for ln in lines)   # 行尾无空格
     assert max(_w(ln) for ln in lines) <= 100       # 100 终端宽度内
 
@@ -123,14 +124,15 @@ def test_col_width_adaptive():
     assert "…" in wide and "毛泽东" in wide         # 超长课名截断
 
 
-def test_min_five_rail_rows():
+def test_min_rail_rows():
     rows = [_r(1, 8, 0, "化学", "K201", 9, 40),
             _r(2, 10, 0, "物理", "K202", 11, 40)]   # 只出现 2 个节次
     text = render_week_grid(rows, week=None, monday=MON)
     lines = text.split("\n")
-    assert len(lines) == 1 + 2 + 2 + 3              # 表头 + 两节×两行 + 3 空轨行
+    # MIN_RAIL_ROWS=3：表头 + 两节×两行 + 1 空轨行，不再垫出空行尾巴
+    assert len(lines) == 1 + 2 + 2 + 1
     assert lines[1].startswith("08:00") and lines[3].startswith("10:00")
-    assert lines[5:] == ["", "", ""]
+    assert lines[5:] == [""]
 
 
 def run_all() -> int:

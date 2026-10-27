@@ -169,7 +169,7 @@ xxt week [12]                 # 本周 / 第 12 周课表（按天分组）
 xxt week --grid               # 终端课表网格图（7 列时间轨，今天列高亮）
 xxt hw                        # 待交作业截止看板（默认只看本学期）
 xxt hw --course 数字信号        # 只看一门课的作业（课程范围下推收窄，省请求）
-xxt hw-ls 数字信号处理         # 单门课的作业列表（序号/名称/提交状态）
+xxt hw-ls 数字信号处理         # 单门课的作业列表（同名多班加 --clazzid 班号）
 xxt hw-info 数字信号处理 2     # 单份作业详情（题量/满分/作答起止/得分）
 xxt exam                      # 考试安排（默认只看本学期，--all 看全部）
 xxt notice [--unread] [--full]   # 通知中心（--full 展开正文，--kw 关键词过滤）
@@ -191,8 +191,8 @@ xxt ics -o 课表.ics           # 全学期课表导出日历
   `download --id` 先查顶层再递归。教学周由学期锚点日期推导，不吃存盘旧值
 - **管道/重定向自动切 JSON**（对标 tamnd/bili-cli）：`xxt today | jq` 无需显式
   `--json`；`XXT_TABLE=1` 强制表格。颜色认 `NO_COLOR` / `FORCE_COLOR`
-- **退出码语义化**：0 成功 / 1 一般错误 / 2 未登录 / 3 触发 9010 反爬 /
-  130 Ctrl+C——脚本与 agent 可精确分支
+- **退出码语义化**：0 成功 / 1 一般错误 / 2 未登录（argparse 用法错误
+  同样返回 2）/ 3 触发 9010 反爬 / 130 Ctrl+C——脚本与 agent 可精确分支
 - `--json` **全部查询命令支持**（含 whoami/courses/status）：输出 UTF-8
   JSON，时间统一 `YYYY-MM-DD HH:MM` 字符串，无表格/进度条/颜色码
 - **下载 9010 反爬**：下载接口可能触发学习通人机验证（下载被 302 到
@@ -346,7 +346,9 @@ xuexitong_mcp/
 └── __main__.py  # python -m xuexitong_mcp 入口
 xuexitong_server.py  # 兼容旧配置的直接运行入口
 学习通小助手.bat    # Windows 双击启动桌面小助手（pythonw，无控制台）
-tests/run_tests.py  # 纯逻辑单测（零依赖：python tests/run_tests.py，也兼容 pytest）
+tests/              # 纯逻辑单测（零依赖：python tests/run_tests.py 会串跑
+                    #   run_tests.py(协议) + test_assistant.py(助手/CLI) +
+                    #   test_weekgrid.py(课表网格)，也各自兼容 pytest）
 pyproject.toml      # pip install . 打包配置（xuexitong-mcp / xuexitong-cli / xxt / xuexitong-assistant 四个命令）
 ```
 

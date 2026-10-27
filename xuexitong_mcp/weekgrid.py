@@ -21,7 +21,7 @@ MIN_COL_WIDTH = 10     # 日列最小显示宽度
 TIME_COL_WIDTH = 5     # 左侧时间轨 "HH:MM"
 COL_GAP = 2            # 列间两空格（不画竖线框，清爽风格）
 DAY_COUNT = 7
-MIN_RAIL_ROWS = 5      # 时间轨至少 5 行
+MIN_RAIL_ROWS = 3      # 时间轨最少行数（垫太高会产生无内容的空行尾巴）
 DAY_NAMES = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
 

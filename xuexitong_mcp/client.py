@@ -416,6 +416,7 @@ class ChaoxingClient:
         self._explicit_phone = phone
         self._explicit_password = password
         self._login_checked_at = 0.0  # 登录探测缓存时间戳
+        self._base_html: str | None = None   # 登录探测拉过的 /base 页（含 fid）
         self._courses_cache: list[dict] | None = None
         self._courses_cache_at = 0.0
         self._hw_cache: dict[tuple, tuple[float, dict]] = {}  # (courseid, clazzid) → (时刻, 数据)
@@ -506,6 +507,7 @@ class ChaoxingClient:
             r = self.session.get(URL_BASE, timeout=self.timeout)
             if not any(marker in r.url or marker in r.text for marker in LOGIN_MARKERS):
                 self._login_checked_at = time.time()
+                self._base_html = r.text   # fetch_courses 要用 fid，别二次请求同页
                 return AuthResult(True, "cookie 有效")
         except Exception:
             pass
@@ -544,7 +546,8 @@ class ChaoxingClient:
         if (not refresh and self._courses_cache is not None
                 and now - self._courses_cache_at < COURSES_CACHE_TTL):
             return self._courses_cache
-        base = self.get(URL_BASE).text
+        # 复用登录探测拉过的 /base 页取 fid——同一条命令别对同一 URL 请求两次
+        base = getattr(self, "_base_html", None) or self.get(URL_BASE).text
         m = (re.search(r'"fid"\s*:\s*"?(\d+)"?', base)
              or re.search(r"var fid = '(\d+)'", base))
         fid = m.group(1) if m else "427"
@@ -805,7 +808,10 @@ class ChaoxingClient:
         openc = hidden_value(page, "openc")
         page_enc = hidden_value(page, "enc")
         if not work_enc:
-            raise RuntimeError("课程页未生成作业签名（workEnc），可能未开放作业功能")
+            raise RuntimeError(
+                "课程页未生成作业签名（workEnc），可能未开放作业功能；"
+                "同名多班时可加 --clazzid 指定另一班（CLI），"
+                "或换更完整的课名重试")
         r = self.get(URL_WORKLIST, params={
             "courseId": c["courseid"], "classId": c["clazzid"], "cpi": c["cpi"],
             "ut": "s", "openc": openc, "enc": work_enc,
@@ -847,7 +853,8 @@ class ChaoxingClient:
 
     def fetch_deadline_overview(self, course: str | None = None,
                                 horizon_days: int = 90,
-                                only_courses: set[str] | None = None
+                                only_courses: set[str] | None = None,
+                                errors: list[str] | None = None
                                 ) -> list[dict]:
         """全部（或 course 指定一门）课程的未完成作业 → 截止看板数据。
 
@@ -856,6 +863,8 @@ class ChaoxingClient:
         返回按"未来（近→远）→ 已过期（最久→最近）→ 截止未知"排序的行；
         horizon_days 只收未来 N 天内截止的（已过期与截止未知始终保留）。
         only_courses：课名集合（双向包含匹配）——CLI/巡检只看本学期课。
+        errors：传入 list 时，拉取失败的课名会 append 进去——调用方
+        （CLI/巡检）据此区分"真没作业"和"拉取失败"，不汇报就是漏交风险。
         """
         if course:
             found = self.find_course(course)
@@ -875,7 +884,10 @@ class ChaoxingClient:
             try:
                 hw = self.fetch_homework(co)
             except Exception:
-                continue  # 未开放作业功能的课（无 workEnc）直接跳过
+                # 未开放作业功能的课（无 workEnc）跳过，但要让调用方知道
+                if errors is not None:
+                    errors.append(co["name"])
+                continue
             for it in hw["items"]:
                 if not is_homework_pending(it["status"]):
                     continue

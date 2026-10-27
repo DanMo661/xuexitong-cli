@@ -300,7 +300,7 @@ def cmd_courses(a) -> int:
         tag = _c("★", "green") if star else " "
         line = f"{tag} {_pad(_clip(c['name'], 32), 34)}"
         if has_teacher:
-            line += _pad(c.get("teacher") or "", 16)
+            line += _pad(_clip(c.get("teacher") or "", 16), 16)
         line += _c(f"{c['courseid']}/{c['clazzid']}", "dim")
         print(line)
     return 0
@@ -466,13 +466,15 @@ def cmd_week(a) -> int:
     cur = sc.get("curriculum", {})
     from .client import ms_to_date
     # 缺省周与 today/next 同哲学：日期推导，不吃存盘时的 realCurrentWeek 旧值
-    week = a.week or _current_week(sc, dt.date.today()) or 1
+    today = dt.date.today()
+    cur_week = _current_week(sc, today) or 1
+    week = a.week or cur_week
     maxw = int(cur.get("maxWeek") or 0)
     if a.week is not None and a.week < 1:
         _stderr("周数从 1 开始")
         return 1
     if maxw and a.week is not None and a.week > maxw:
-        _stderr(f"这个学期只有 {maxw} 周（当前第 {week} 周）")
+        _stderr(f"这个学期只有 {maxw} 周（当前第 {cur_week} 周）")
         return 1
     fw = cur.get("firstWeekDate")
     monday = ms_to_date(int(fw)) + dt.timedelta(days=(week - 1) * 7) if fw \
@@ -504,8 +506,10 @@ def cmd_week(a) -> int:
         if dow != last_dow:
             day = monday + dt.timedelta(days=dow - 1)
             wd = "一二三四五六日"[dow - 1]
-            mark = _c(" ·今天", "cyan") if day == dt.date.today() else ""
-            print(_c(f"周{wd} {day:%m/%d}", "yellow"), mark)
+            line = _c(f"周{wd} {day:%m/%d}", "yellow")
+            if day == dt.date.today():
+                line += _c(" ·今天", "cyan")
+            print(line)
             last_dow = dow
         print(f"  {s:%H:%M}-{e:%H:%M}  {_pad(_clip(name, 24), 24)}"
               f"{_pad(_clip(loc, 14), 14)}{tea}")
@@ -526,7 +530,13 @@ def cmd_hw(a) -> int:
             _stderr(f"本学期课表里没有包含「{a.course}」的课"
                     f"（--all-courses 可看全部课）")
             return 1
-    rows = cli.fetch_deadline_overview(only_courses=names)
+    failed: list[str] = []
+    rows = cli.fetch_deadline_overview(only_courses=names, errors=failed)
+    if failed:
+        # 拉取失败的课静默跳过=假阴性（用户以为没作业实则拉不到）——必须亮出来
+        _stderr("⚠ 这些课的作业没拉到（可能未开放作业功能）："
+                + "、".join(_clip(n, 18) for n in failed[:6])
+                + (f" 等 {len(failed)} 门" if len(failed) > 6 else ""))
     if a.course:
         kw = a.course.casefold()
         rows = [r for r in rows if kw in str(r["course"]).casefold()]
@@ -588,12 +598,23 @@ def _hw_ls_lines(data: dict) -> list[str]:
     return lines
 
 
+def _find_course(cli, kw: str, clazzid: str = "") -> dict | None:
+    """按关键词找课；--clazzid 给了就按班号精确定位（同名多班选班用）。"""
+    if not clazzid:
+        return cli.find_course(kw)
+    for c in cli.fetch_courses():
+        if str(c.get("clazzid")) == clazzid:
+            return c
+    return None
+
+
 def cmd_hw_ls(a) -> int:
     cli = _client()
     _login_or_die(cli)
-    c = cli.find_course(a.course)
+    c = _find_course(cli, a.course, a.clazzid)
     if not c:
-        _stderr(f"未找到包含「{a.course}」的课程")
+        hint = f"（--clazzid {a.clazzid} 也不匹配）" if a.clazzid else ""
+        _stderr(f"未找到包含「{a.course}」的课程{hint}")
         return 1
     data = cli.fetch_homework(c)
     items = data.get("items") or []
@@ -639,14 +660,15 @@ def _hw_info_lines(d: dict) -> list[str]:
 
 
 def cmd_hw_info(a) -> int:
-    cli = _client()
-    _login_or_die(cli)
-    if a.index < 1:
+    if a.index < 1:   # 纯参数校验先于登录探测，错参数不付网络请求
         _stderr("序号从 1 开始")
         return 1
-    c = cli.find_course(a.course)
+    cli = _client()
+    _login_or_die(cli)
+    c = _find_course(cli, a.course, a.clazzid)
     if not c:
-        _stderr(f"未找到包含「{a.course}」的课程")
+        hint = f"（--clazzid {a.clazzid} 也不匹配）" if a.clazzid else ""
+        _stderr(f"未找到包含「{a.course}」的课程{hint}")
         return 1
     try:
         d = cli.fetch_homework_detail(c, a.index)
@@ -718,11 +740,11 @@ def _notice_time(it) -> str:
 
 
 def cmd_notice(a) -> int:
-    cli = _client()
-    _login_or_die(cli)
-    if a.limit < 1:
+    if a.limit < 1:   # 纯参数校验先于登录探测
         _stderr("--limit 至少为 1")
         return 1
+    cli = _client()
+    _login_or_die(cli)
     items = cli.fetch_notices(limit=a.limit, unread_only=a.unread,
                               keyword=a.kw or "")
     if a.json:
@@ -885,7 +907,11 @@ def cmd_chapters(a) -> int:
 
 def _try_download(cli, c: dict, data_id: int, save: str, name: str,
                   code: str = ""):
-    """下载；9010 反爬拦截时按需引导人工验证码（不自动识码）。"""
+    """下载；9010 反爬拦截时按需引导人工验证码（不自动识码）。
+
+    拦截未解除一律 raise RuntimeError("9010 …")——main 会映射成退出码 3，
+    README 的退出码契约才兑现（return None 只能落 1）。
+    """
     try:
         return cli.download_material(c, data_id, save, name)
     except RuntimeError as e:
@@ -898,8 +924,7 @@ def _try_download(cli, c: dict, data_id: int, save: str, name: str,
         pass
     else:
         if not cli.fetch_antispider_captcha(cap):
-            _stderr("取反爬验证码图片失败，稍后再试")
-            return None
+            raise RuntimeError(f"9010 反爬拦截，且取验证码图片失败，稍后再试")
         try:
             if sys.stdin.isatty():
                 print(_c(f"触发学习通反爬拦截，验证码已存 {cap}（打开看图）",
@@ -907,23 +932,21 @@ def _try_download(cli, c: dict, data_id: int, save: str, name: str,
                 for _ in range(3):
                     code = input("输入图中 4 位验证码（回车放弃）: ").strip()
                     if not code:
-                        return None
+                        break
                     if len(code) == 4:
                         break
-                if len(code) != 4:
-                    return None
         except EOFError:
             code = ""
-        if not code:
-            _stderr(f"触发学习通反爬拦截（9010）。验证码图片已存：{cap}\n"
-                    f"打开图片识读后重跑，加 --code 四位码 参数提交")
-            return None
+        if len(code) != 4:
+            raise RuntimeError(
+                f"9010 反爬拦截未解除。验证码图片已存：{cap}\n"
+                f"打开图片识读后重跑，加 --code 四位码 参数提交")
     if not cli.submit_antispider_captcha(code):
         cli.fetch_antispider_captcha(cap)   # 换一张新图供下次尝试
-        _stderr(f"验证码不对或已跨会话失效（验证码与取图会话绑定）。"
-                f"最稳路径：在本机终端直接跑 xxt download（交互输入验证码）。"
-                f"已换新图：{cap}")
-        return None
+        raise RuntimeError(
+            "9010 验证码不对或已跨会话失效（验证码与取图会话绑定）。"
+            f"最稳路径：在本机终端直接跑 xxt download（交互输入验证码）。"
+            f"已换新图：{cap}")
     return cli.download_material(c, data_id, save, name)
 
 
@@ -1061,12 +1084,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("hw-ls", help="单门课的作业列表")
     s.add_argument("course", help="课名关键词")
+    s.add_argument("--clazzid", default="",
+                   help="同名多班时按班号选课（courses 输出里的 clazzid）")
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_hw_ls)
 
     s = sub.add_parser("hw-info", help="单份作业详情（题量/满分/时间/得分）")
     s.add_argument("course", help="课名关键词")
     s.add_argument("index", type=int, help="作业序号（hw-ls 输出里的序号）")
+    s.add_argument("--clazzid", default="",
+                   help="同名多班时按班号选课（courses 输出里的 clazzid）")
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_hw_info)
 
@@ -1079,7 +1106,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--unread", action="store_true", help="只看未读")
     s.add_argument("--full", action="store_true", help="显示通知正文")
     s.add_argument("--kw", default="", help="按关键词过滤（标题+正文）")
-    s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--limit", type=int, default=20, help="条数（默认 20）")
     s.add_argument("--json", action="store_true", help="输出 JSON（脚本/agent 友好）")
     s.set_defaults(fn=cmd_notice)
 
