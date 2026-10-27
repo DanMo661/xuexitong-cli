@@ -354,7 +354,7 @@ def build_ics(lessons: list[dict], curriculum: dict, cal_name: str = "课表") -
     if not section_times:
         raise RuntimeError("课表缺少 lessonTimeConfigArray（节次时间表），无法确定上下课时间")
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0",
-             "PRODID:-//Xuexitong-mcp//schedule//CN",
+             "PRODID:-//xuexitong-cli//schedule//CN",
              f"X-WR-CALNAME:{escape_ics(cal_name)}"]
     for les in lessons:
         begin = int(les.get("beginNumber") or 1)
@@ -368,7 +368,7 @@ def build_ics(lessons: list[dict], curriculum: dict, cal_name: str = "课表") -
         dow = int(les.get("dayOfWeek") or 1)
         for w in expand_weeks(les.get("weeks")):
             day = first_monday + timedelta(days=(w - 1) * 7 + dow - 1)
-            uid = f"{les.get('lessonId') or 'l'}-{begin}-{w}@Xuexitong-mcp"
+            uid = f"{les.get('lessonId') or 'l'}-{begin}-{w}@xuexitong-cli"
             lines += ["BEGIN:VEVENT",
                       f"UID:{uid}",
                       f"SUMMARY:{escape_ics(name)}",

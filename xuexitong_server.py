@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-r"""Xuexitong-mcp 兼容入口。
+r"""直接运行入口（兼容旧 MCP 配置写法）。
 
 旧版 MCP 配置直接指向本文件；实际实现已重构为 xuexitong_mcp/ 包
 （client.py 接口层 + server.py 工具层），行为与旧单文件版兼容。
-新装推荐用 `pip install .` 后运行 `Xuexitong-mcp` 或 `python -m xuexitong_mcp`。
+新装推荐用 `pip install .` 后运行 `xuexitong-mcp` 或 `python -m xuexitong_mcp`。
 
 工具总览（16 个，全部只读查询）：
     login            登录并持久化会话

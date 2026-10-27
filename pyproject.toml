@@ -3,14 +3,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "Xuexitong-mcp"
-version = "1.4.1"
-description = "学习通（超星）只读查询 MCP Server + 桌面悬浮窗：课表(含 .ics 导出) / 作业截止 / 进度 / 通知"
+name = "xuexitong-cli"
+version = "2.0.0"
+description = "学习通（超星）只读三件套：CLI(xxt) + MCP Server + 桌面悬浮窗——课表(.ics 导出)/作业截止/考试/章节任务点/通知/资料下载"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Wu Jiale" }]
-keywords = ["chaoxing", "xuexitong", "mcp", "model-context-protocol"]
+keywords = ["chaoxing", "xuexitong", "mcp", "cli", "model-context-protocol"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Education",
@@ -32,13 +32,13 @@ dependencies = [
 ]
 
 [project.scripts]
-Xuexitong-mcp = "xuexitong_mcp.server:main"
+xuexitong-mcp = "xuexitong_mcp.server:main"
 xuexitong-assistant = "xuexitong_mcp.widget:main"
 xuexitong-cli = "xuexitong_mcp.cli:main"
 xxt = "xuexitong_mcp.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/DanMo661/Xuexitong-mcp"
+Homepage = "https://github.com/DanMo661/xuexitong-cli"
 
 [tool.setuptools]
 packages = ["xuexitong_mcp"]

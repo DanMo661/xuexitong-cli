@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Xuexitong-mcp 纯逻辑单元测试。
+"""xuexitong-cli 纯逻辑单元测试。
 
 零依赖可直接运行：  python tests/run_tests.py
 也可用 pytest：     pytest tests/ -v

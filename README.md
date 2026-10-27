@@ -1,10 +1,10 @@
-# Xuexitong-mcp
+# xuexitong-cli
 
-> 原名 `chaoxing-mcp`，2026-09 起更名为 `Xuexitong-mcp`（GitHub 旧地址自动重定向，包名同步改为 `xuexitong_mcp`）。
+> 曾用名 `chaoxing-mcp` → `Xuexitong-mcp`（GitHub 旧地址自动重定向，Python 包名保持 `xuexitong_mcp` 不变）。
 
-学习通（超星）MCP Server + 桌面小助手 —— 把你的课表（含 .ics 日历导出）、作业截止、考试、章节进度、通知、云盘接进任意 MCP 客户端（ZCode / Claude Desktop / Cursor 等），或在桌面上挂一个常驻的"学习通小助手"悬浮窗。
+学习通（超星）三件套：**命令行 `xxt` + MCP Server + 桌面常驻小助手** —— 课表（含 .ics 日历导出）、作业截止、考试、章节任务点、通知、资料下载、云盘，全只读。终端党用 `xxt`，agent 党接 MCP（ZCode / Claude Desktop / Cursor 等），不想动手就挂桌面悬浮窗让它替你盯着。
 
-全部接口均经真实账号实测验证（2026-09）。
+全部接口均经真实账号实测验证（2026-09 ～ 2026-10）。
 
 ## 工具列表（16 个）
 
@@ -61,15 +61,15 @@
 ## 安装
 
 ```bash
-git clone https://github.com/DanMo661/Xuexitong-mcp.git
-cd Xuexitong-mcp
+git clone https://github.com/DanMo661/xuexitong-cli.git
+cd xuexitong-cli
 pip install -r requirements.txt   # requests / pycryptodome / mcp / PySide6 / windows-toasts / pywin32
 ```
 
 Python >= 3.10。也可以安装为命令（可选）：
 
 ```bash
-pip install .        # 之后得到 Xuexitong-mcp 命令，等价于 python -m xuexitong_mcp
+pip install .        # 得到 xuexitong-mcp / xuexitong-cli / xxt / xuexitong-assistant 四个命令
 ```
 
 ## 凭据配置（三选一，优先级从高到低）
@@ -89,18 +89,18 @@ copy config.example.json config.json   # Linux: cp
 
 ```jsonc
 // 1. 源码直接运行（clone 后免安装）
-{ "command": "python", "args": ["D:/path/to/Xuexitong-mcp/xuexitong_server.py"] }
+{ "command": "python", "args": ["D:/path/to/xuexitong-cli/xuexitong_server.py"] }
 
 // 2. 模块方式运行
-{ "command": "python", "args": ["-m", "xuexitong_mcp"], "cwd": "D:/path/to/Xuexitong-mcp" }
+{ "command": "python", "args": ["-m", "xuexitong_mcp"], "cwd": "D:/path/to/xuexitong-cli" }
 
 // 3. pip install . 之后用命令名
-{ "command": "Xuexitong-mcp" }
+{ "command": "xuexitong-mcp" }
 ```
 
 外层按客户端惯例包一层：ZCode 写在 `~/.zcode/cli/config.json` 的 `mcp.servers` 下，Claude Desktop 写在 `claude_desktop_config.json` 的 `mcpServers` 下。Windows 下 `command` 建议写 python 绝对路径（如 `D:/Python/python.exe`）。
 
-## 学习通小助手（桌面常驻助手 v3.0）
+## 学习通小助手（桌面常驻助手 v4.0）
 
 不想开对话、也不想再点开学习通 App？`assistant/` 是完整的桌面常驻助手：**巡检引擎 + Windows 通知 + PySide6/QML 悬浮窗 + 托盘**，学习通有新作业/资料/通知/出分时主动送达，你只需要看一眼桌面。
 
@@ -124,23 +124,25 @@ python -m venv .venv
 - **人性化规则**：默认免打扰 23:00–07:30；正在上课时自动静默（下课补弹）；红色只留给紧急事项
 - **通知通道**：Windows 原生 Toast（进通知中心，**可点击直接跳到对应页面**；windows-toasts 优先、winotify 回退）+ 应用内时间线 + 可选邮件备份通道（SMTP 授权码，默认关）
 
-### 悬浮窗（cc-switch 浅色设计语言）
+### 悬浮窗（FLstyle 工具类设计语言）
 
-- **迷你态**（360×64）：品牌块 + 三态状态点（上课中蓝呼吸 / 30 分钟内要上课橙 / 平时灰）+ 当前/下一节课与倒计时；点顶栏展开收起；**Alt+Shift+C 全局热键**随时唤起/隐藏；拖拽贴边磁吸
-- **展开卡**（360×540，四标签页）：
-  - **今天**：课程手风琴（进行中/同时段/已结束三态，点行展开老师·节次·周次）、DDL 横幅、考试横幅、任务点缺口摘要
-  - **课表**：周网格（时间轨当前节胶囊 + **当前时间红线**、连堂合并满铺色块、周次导航翻周）
+- **迷你态**（360×64）：花形印章品牌位 + 三态状态点（上课中蓝呼吸 / 30 分钟内要上课橙 / 平时灰）+ 当前/下一节课与倒计时药丸；点顶栏展开收起；**Alt+Shift+C 全局热键**随时唤起/隐藏；拖拽贴边磁吸
+- **展开卡**（360×540，四标签页，白色 Stadium 分段器导航）：
+  - **今天**：课程手风琴（进行中/同时段/已结束三态，点行展开老师·节次·周次）、今日概览卡、DDL 横幅、考试横幅、任务点缺口摘要
+  - **课表**：周网格（时间轨当前节胶囊 + **当前时间红线**、连堂合并满铺色块、按住拖动翻周）
   - **作业**：DDL 看板（紧迫度变色、过期沉底）；**右键作业卡 → 在学习通打开 / 不再提醒**（自动复制作业名）
   - **动态**：巡检事件时间线（出分带分数、考试带时间）
-- **详情窗**（托盘/右键进入，五标签页）：动态 / 作业（悬停出「去交 ↗」「✕ 忽略」按钮，底部恢复入口）/ 考试+任务点 / 通知中心（全部·未读过滤）/ 设置（巡检间隔、免打扰、Toast、开机自启、**导出课表 .ics 到手机日历**、邮件）
-- **托盘常驻**：双击显隐小窗；右键菜单承载全部入口；单实例锁防双开；位置自动记忆
+- **详情窗**（460×624，无框自绘标题栏：拖拽/置顶图钉/最小化/关闭）：动态 / 作业（悬停出「去交 ↗」「✕ 忽略」按钮，底部恢复入口）/ 考试+任务点 / 通知中心（全部·未读过滤）/ 设置（巡检间隔、免打扰、Toast、开机自启、**导出课表 .ics 到手机日历**、邮件）
+- **单窗口在场**：小窗与详情窗同一时刻只显示一个——详情窗打开时小窗自动退场，关闭/最小化详情窗即回到小窗；详情窗位置记忆
+- **动效**：FLstyle 值渐变体系——开关窗淡入淡出、页切换交叉淡化、列表卡片错峰入场、分段器原位迁移、进度条宽度渐变（零位移）
+- **托盘常驻**：双击显隐小窗；右键菜单承载全部入口；单实例锁防双开（命名互斥量 + 具名管道双保险）；位置自动记忆
 - **开机自启**：设置页一键开关（HKCU Run 注册表直指 pythonw 无黑框，可在任务管理器启动页管理）
 
 ![小窗-今天](docs/shot_t0.png)
 ![小窗-课表](docs/shot_t1.png)
 ![小窗-作业](docs/shot_t2.png)
+![详情窗-动态时间线](docs/shot_d0.png)
 ![详情窗-考试与任务点](docs/shot_d2.png)
-![详情窗-通知中心](docs/shot_d3.png)
 
 ### 无 GUI 模式（服务器/调试）
 
@@ -150,7 +152,7 @@ python -m venv .venv
 .venv\Scripts\python -m assistant.app --screenshot out.png   # UI 自截图
 ```
 
-## 命令行 xxt（xuexitong-cli，v1.0）
+## 命令行 xxt
 
 不打开浏览器、不进 GUI，终端里直接查——像 bili-cli 之于 B 站。安装
 （`pip install -e .`）后两个入口等价：`xuexitong-cli` / `xxt`，也可以
@@ -161,12 +163,14 @@ python -m venv .venv
 
 ```bash
 xxt today                     # 今天有什么课（含进行中/已结束状态）
-xxt today --json              # JSON 输出（today/hw/exam/notice/progress 均支持）
+xxt next                      # 下一节课 + 人话倒计时（今天课上完自动找明天/下周，14 天范围）
 xxt week [12]                 # 本周 / 第 12 周课表（按天分组）
 xxt hw                        # 待交作业截止看板（默认只看本学期）
+xxt hw --course 数字信号        # 只看一门课的作业
 xxt exam                      # 考试安排（默认只看本学期，--all 看全部）
-xxt notice [--unread]         # 通知中心
+xxt notice [--unread]         # 通知中心（--full 展开正文）
 xxt progress                  # 任务点进度（默认只看本学期）
+xxt chapters 数字信号处理       # 章节任务点明细树（--todo 只看没刷完的小节）
 xxt courses                   # 课程列表（★=本学期课表内，含任课老师）
 xxt whoami                    # 姓名/学校/uid
 xxt materials 数字信号处理    # 课程资料区（含下载用编号）
@@ -177,13 +181,12 @@ xxt pan <文件夹id>            # 云盘下钻一层
 xxt ics -o 课表.ics           # 全学期课表导出日历
 ```
 
-- `today` 秒开：桌面助手课表缓存（`store.json` 的 `schedule_cache`）距
+- `today` / `next` 秒开：桌面助手课表缓存（`store.json` 的 `schedule_cache`）距
   保存不足 24h 就直接用缓存，零网络立即返回；过期/缺失回退在线拉取
   （教学周由学期锚点日期推导，不吃存盘时的"当前周"旧值）。`week`/`ics`
   查任意周则一律缓存优先
-- `--json`（today/hw/exam/notice/progress）：输出 UTF-8 JSON 数组，
-  时间统一 `YYYY-MM-DD HH:MM` 字符串，无表格/进度条/颜色码，方便脚本
-  与 agent 消费
+- `--json` **全部 14 个查询命令支持**：输出 UTF-8 JSON，时间统一
+  `YYYY-MM-DD HH:MM` 字符串，无表格/进度条/颜色码，方便脚本与 agent 消费
 - **下载 9010 反爬**：下载接口可能触发学习通人机验证（下载被 302 到
   antispider 页，报错会明确提示）。`xxt download` 在终端交互模式下会
   自动取验证码图存 `~\.xxt_captcha.png`、提示人工输入 4 位码后重试
@@ -336,7 +339,7 @@ xuexitong_mcp/
 xuexitong_server.py  # 兼容旧配置的直接运行入口
 学习通小助手.bat    # Windows 双击启动桌面小助手（pythonw，无控制台）
 tests/run_tests.py  # 纯逻辑单测（零依赖：python tests/run_tests.py，也兼容 pytest）
-pyproject.toml      # pip install . 打包配置（Xuexitong-mcp / xuexitong-assistant 两个命令）
+pyproject.toml      # pip install . 打包配置（xuexitong-mcp / xuexitong-cli / xxt / xuexitong-assistant 四个命令）
 ```
 
 ## License

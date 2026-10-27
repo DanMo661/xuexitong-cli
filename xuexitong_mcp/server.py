@@ -489,7 +489,7 @@ def list_pan_files(folder_id: str = "") -> str:
 
 
 def main() -> None:
-    """stdio 入口（python -m xuexitong_mcp / Xuexitong-mcp 命令）。"""
+    """stdio 入口（python -m xuexitong_mcp / xuexitong-mcp 命令）。"""
     mcp.run()
 
 

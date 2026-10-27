@@ -1,4 +1,4 @@
-# Xuexitong-mcp 项目规范（v2.1 桌面小窗产品化）
+# xuexitong-cli 项目规范（v2.1 桌面小窗产品化）
 
 ## 定位
 
