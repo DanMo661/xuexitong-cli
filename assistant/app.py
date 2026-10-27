@@ -79,21 +79,44 @@ class _HotkeyFilter(QAbstractNativeEventFilter):
         return False
 
 
-def tray_icon(color: str = "#0969DA") -> QIcon:
-    """程序化生成托盘图标：圆底白字"学"。"""
+def tray_icon(color: str = "#1B6FD8") -> QIcon:
+    """程序化生成托盘图标：花形印章 + 白色学仕帽（与 QML Logo 同形）。"""
+    import math
+
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QPainterPath, QPolygonF
+
     pm = QPixmap(64, 64)
     pm.fill(Qt.transparent)
     qp = QPainter(pm)
     qp.setRenderHint(QPainter.Antialiasing)
-    qp.setBrush(QColor(color))
+    # 花形 seal：8 点圆周 + 每段 Q 曲线（控制点在外鼓半径上）
+    cx = cy = 32.0
+    r = 22.0
+    bulge = 1.14
+    n = 8
+    pts = []
+    for i in range(n):
+        a = 2 * math.pi * i / n - math.pi / 2
+        pts.append(QPointF(cx + r * math.cos(a), cy + r * math.sin(a)))
+    path = QPainterPath()
+    for i in range(n):
+        am = 2 * math.pi * i / n - math.pi / 2 + math.pi / n
+        R = r * bulge
+        if i == 0:
+            path.moveTo(pts[0])
+        path.quadTo(QPointF(cx + R * math.cos(am), cy + R * math.sin(am)),
+                    pts[(i + 1) % n])
+    path.closeSubpath()
     qp.setPen(Qt.NoPen)
-    qp.drawEllipse(4, 4, 56, 56)
-    qp.setPen(QColor("white"))
-    f = qp.font()
-    f.setPixelSize(34)
-    f.setBold(True)
-    qp.setFont(f)
-    qp.drawText(pm.rect(), Qt.AlignCenter, "学")
+    qp.setBrush(QColor(color))
+    qp.drawPath(path)
+    # 学仕帽：菱形帽板 + 横帽檐 + 中心流苏（白色，与 Glyphs kindCap 同构）
+    qp.setBrush(QColor("white"))
+    qp.drawPolygon(QPolygonF([QPointF(32, 15), QPointF(46, 25),
+                              QPointF(32, 35), QPointF(18, 25)]))
+    qp.drawRoundedRect(QRectF(23.5, 37, 17, 3), 1.5, 1.5)
+    qp.drawEllipse(QPointF(32, 26), 2.2, 2.2)
     qp.end()
     return QIcon(pm)
 
@@ -333,6 +356,10 @@ class App:
         self.widget = self.engine.rootObjects()[0]
         self.detail_win = self.engine.rootObjects()[1]
         self.bridge.actionTriggered.connect(self.on_widget_action)
+        # 单窗口在场：详情窗可见性联动（隐藏→按原状态唤回小窗）
+        self._mini_visible_before_detail = False
+        self._detail_pos: tuple[int, int] | None = None
+        self.detail_win.visibleChanged.connect(self._on_detail_visibility)
         # Toast 点击跳转：回调在外部线程，信号转发回 UI 线程
         self._toast_relay = _ToastRelay()
         self._toast_relay.triggered.connect(lambda tab: self.show_detail(tab))
@@ -558,7 +585,14 @@ class App:
         idx = {"动态": 0, "作业": 1, "考试": 2, "通知": 3, "设置": 4}.get(tab, 0)
         if tab:
             self.detail_bridge.gotoTab(idx)
-        self.detail_win.show()
+        # 单窗口在场：小窗是常驻置顶 Tool 窗，详情窗在场时若不退场，
+        # 会浮在详情窗内容上面（"背景出现小窗蓝字"的叠影就是这么来的）
+        if not self.detail_win.isVisible():
+            self._mini_visible_before_detail = self.widget.isVisible()
+            if self._mini_visible_before_detail:
+                self.widget.hide()
+            self._place_detail()
+        QMetaObject.invokeMethod(self.detail_win, "requestOpen")
         self.detail_win.raise_()
         self.detail_win.requestActivate()
         if idx <= 1:   # 只有动态/作业页吃作业数据，从考试/通知进来别白拉
@@ -566,7 +600,38 @@ class App:
         self.detail_bridge.set_timeline(self.store.timeline(limit=60))
         self._push_extras()
 
+    def _place_detail(self) -> None:
+        """详情窗落位：优先上次的记忆位（在屏内），否则居中于小窗所在屏。"""
+        w = self.detail_win
+        scr = (self.qapp.screenAt(self.widget.geometry().center())
+               or self.qapp.primaryScreen())
+        if self._detail_pos is not None:
+            x, y = self._detail_pos
+            if scr.geometry().contains(x + 120, y + 120):
+                w.setX(x)
+                w.setY(y)
+                return
+        g = scr.availableGeometry()
+        w.setX(g.left() + (g.width() - int(w.width())) // 2)
+        w.setY(max(g.top() + 40,
+                   g.top() + (g.height() - int(w.height())) // 3))
+
+    def _on_detail_visibility(self, visible: bool) -> None:
+        if visible:
+            return
+        self._detail_pos = (int(self.detail_win.x()), int(self.detail_win.y()))
+        if self._mini_visible_before_detail:
+            self.widget.show()
+            self._mini_visible_before_detail = False
+
     def toggle_widget(self) -> None:
+        # 详情窗在场时热键 = 收起详情回到小窗（先记状态再收，
+        # visibleChanged 会把小窗唤回，这里显式 show 双保险）
+        if self.detail_win.isVisible():
+            self._mini_visible_before_detail = False
+            QMetaObject.invokeMethod(self.detail_win, "requestClose")
+            self.widget.show()
+            return
         self.widget.setVisible(not self.widget.isVisible())
 
     def _on_toast(self, title: str, body: str, tab: str = "") -> None:
@@ -831,10 +896,14 @@ def _screenshot_mode() -> int:
 
     def step(i: int):
         if i > 3:
+            # 拍详情窗前收掉置顶小窗（单窗口在场；混拍会叠影）
+            app.widget.hide()
             detail_step(0)   # 小窗四页拍完 → 详情窗五页
             return
         app.bridge.set_tab(i)
-        QTimer.singleShot(500, lambda: (shoot(f"{base}_t{i}.png"), step(i + 1)))
+        # 900ms：页内入场 stagger（封顶 8×35ms）+ 160ms 渐变要播完，
+        # 500ms 会截到半场（上轮"花屏叠印"假象的来源）
+        QTimer.singleShot(900, lambda: (shoot(f"{base}_t{i}.png"), step(i + 1)))
 
     def _img_blank(img) -> bool:
         """全图同色 = 离屏帧没重绘（黑块/白块假象，历史坑）。"""
@@ -879,11 +948,19 @@ def _screenshot_mode() -> int:
         app.detail_bridge.gotoTab(i)
         app.detail_win.show()
         app.detail_win.raise_()
-        QTimer.singleShot(500,
+        QTimer.singleShot(900,
                           lambda: (grab_detail_win(f"{base}_d{i}.png"),
                                    detail_step(i + 1)))
 
     def first():
+        # 光标停在哪就拍进哪（上轮"幻影文字层"= 鼠标箭头被当缺陷报了两轮），
+        # 拍前统一挪到主屏右下角
+        try:
+            import ctypes
+            sg = app.qapp.primaryScreen().geometry()
+            ctypes.windll.user32.SetCursorPos(sg.right() - 4, sg.bottom() - 4)
+        except Exception:
+            pass
         shoot(base + "_mini.png")
         QMetaObject.invokeMethod(app.widget, "toggleMode")
         QTimer.singleShot(500, lambda: step(0))

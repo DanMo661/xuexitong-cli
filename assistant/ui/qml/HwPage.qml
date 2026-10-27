@@ -43,14 +43,24 @@ Item {
             x: 12; width: parent.width - 24
             spacing: 8
 
-            // 分组标题（FLstyle：13px 灰、卡外上方）
+            // 分组标题（FLstyle：13px 灰、卡外上方、带小图标）
             Item {
                 width: parent.width; height: 26
-                Text {
+                Row {
                     anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
-                    text: "待办截止"
-                    color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
-                    font.family: Ui.Theme.fontFamily
+                    spacing: 6
+                    Glyphs {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 12; height: 12; thickness: 2
+                        kind: 2   // Doc
+                        color: Ui.Theme.fg2
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "待办截止"
+                        color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
+                        font.family: Ui.Theme.fontFamily
+                    }
                 }
                 Rectangle {
                     anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
@@ -102,7 +112,7 @@ Item {
                     Component.onCompleted: stagger.start()
                     SequentialAnimation {
                         id: stagger
-                        PauseAnimation { duration: index * 30 }
+                        PauseAnimation { duration: Math.min(index, 8) * 30 }
                         NumberAnimation {
                             target: hwCard; property: "opacity"
                             to: hwCard.endOpacity; duration: 180
@@ -112,25 +122,25 @@ Item {
                     Row {
                         anchors.fill: parent
                         anchors.leftMargin: 10; anchors.rightMargin: 12
-                        spacing: 10
+                        spacing: 9
 
-                        // 课程色块（课程身份色）
+                        // 课程色徽章（课程身份色，28 小方章）
                         Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 36; height: 36; radius: 10
+                            width: 28; height: 28; radius: 8
                             color: modelData.cbg || Ui.Theme.track
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData.course.length > 0 ? modelData.course[0] : "?"
                                 color: modelData.cfg || Ui.Theme.fg2
-                                font.pixelSize: 15; font.bold: true
+                                font.pixelSize: 12; font.bold: true
                                 font.family: Ui.Theme.fontFamily
                             }
                         }
 
                         Column {
                             anchors.verticalCenter: parent.verticalCenter; spacing: 3
-                            width: parent.width - 36 - 100 - 24
+                            width: parent.width - 28 - 100 - 22
                             Text {
                                 text: modelData.course
                                 color: Ui.Theme.fg3; font.pixelSize: Ui.Theme.fsCap

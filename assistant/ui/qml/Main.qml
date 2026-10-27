@@ -109,29 +109,25 @@ Window {
 
             Row {
                 anchors.fill: parent
-                anchors.leftMargin: 14
+                anchors.leftMargin: 12
                 spacing: 10
 
-                // 品牌块 + 右下角状态角标（品牌点 = 主色允许的少数位置之一）
-                Rectangle {
+                // 品牌印章 + 右下角状态角标（花形 seal = FLstyle 品牌形）
+                Item {
                     id: logoTile
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 32; height: 32; radius: 10
-                    color: Ui.Theme.primary
-                    Text {
-                        anchors.centerIn: parent
-                        text: "学"
-                        color: "#FFFFFF"; font.pixelSize: 15
-                        font.bold: true
-                        font.family: Ui.Theme.fontFamily
+                    width: 32; height: 32
+                    Logo {
+                        anchors.fill: parent
+                        base: Ui.Theme.primary
                     }
                     // 三态：上课中蓝呼吸 / 30 分钟内要上课橙 / 平时灰
                     readonly property bool soon: !Bridge.active
                                                  && Bridge.soonMinutes >= 0
                                                  && Bridge.soonMinutes < 30
                     Rectangle {
-                        x: parent.width - 8; y: parent.height - 8
-                        width: 12; height: 12; radius: 6
+                        x: parent.width - 9; y: parent.height - 9
+                        width: 11; height: 11; radius: 5.5
                         color: Bridge.active ? Ui.Theme.primary
                                : logoTile.soon ? Ui.Theme.warn
                                : Ui.Theme.fg2
@@ -178,15 +174,23 @@ Window {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
 
-                // 倒计时是唯一跳动数值 → tabular nums，数字宽度恒定不抖
-                Text {
+                // 倒计时 = 唯一跳动数值：井中药丸 + tabular nums（宽度恒定不抖）；
+                // 上课中主色淡底，平时中性井
+                Rectangle {
                     visible: Bridge.countdown !== ""
                     anchors.verticalCenter: parent.verticalCenter
-                    text: Bridge.countdown
-                    color: Bridge.active ? Ui.Theme.primary : Ui.Theme.fg2
-                    font.pixelSize: Ui.Theme.fsSub; font.weight: Font.DemiBold
-                    font.family: Ui.Theme.fontFamily
-                    font.features: { "tnum": 1 }
+                    width: cdTxt.width + 16; height: 24; radius: 12
+                    color: Bridge.active ? Ui.Theme.primarySoft : Ui.Theme.well
+                    Behavior on color { ColorAnimation { duration: Ui.Theme.durFade } }
+                    Text {
+                        id: cdTxt
+                        anchors.centerIn: parent
+                        text: Bridge.countdown
+                        color: Bridge.active ? Ui.Theme.primary : Ui.Theme.fg2
+                        font.pixelSize: Ui.Theme.fsCap; font.weight: Font.DemiBold
+                        font.family: Ui.Theme.fontFamily
+                        font.features: { "tnum": 1 }
+                    }
                 }
 
                 Rectangle {
@@ -213,9 +217,16 @@ Window {
                 Rectangle {
                     id: syncBtn
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 30; height: 30; radius: Ui.Theme.radiusSm
+                    width: 28; height: 28; radius: 8
                     color: Ui.Theme.well
                     HoverHandler { id: syncHover }
+                    Rectangle {
+                        // hover 独立层：透明度渐变，避免 color 插值灰影
+                        anchors.fill: parent; radius: parent.radius
+                        color: Ui.Theme.hoverOverlay
+                        opacity: syncHover.hovered ? 1 : 0
+                        Behavior on opacity { NumberAnimation { duration: Ui.Theme.durFast } }
+                    }
                     Text {
                         id: syncIcon
                         anchors.centerIn: parent
@@ -223,7 +234,7 @@ Window {
                         color: Bridge.scanning ? Ui.Theme.primary
                                : syncHover.hovered ? Ui.Theme.primary
                                : Ui.Theme.fg2
-                        font.pixelSize: 15
+                        font.pixelSize: 14
                         font.family: Ui.Theme.fontFamily
                         Behavior on color { ColorAnimation { duration: Ui.Theme.durFast } }
                         RotationAnimation on rotation {
@@ -273,17 +284,16 @@ Window {
             visible: card.expanded
             clip: true
 
-            // ---- 标签栏：FLstyle 分段器（灰轨 + 选中段实心主色胶囊白字，
-            // 原位淡入淡出迁移，无滑动 thumb；每段带小图标）----
+            // ---- 标签栏：FLstyle 分段器实测范式（金样 01 实测）----
+            // 白色 Stadium 容器 + 未选中段=窗口底色药丸（靠白容器显形）
+            // + 选中段实心主色胶囊白字；原位淡入淡出迁移，无滑动 thumb
             Item {
                 id: tabBar
                 width: parent.width - 24
                 x: 12; height: 40
-                // 轨：白底灰页上"往中灰方向"一档（L91）
                 Rectangle {
                     y: 4; width: parent.width; height: 32
                     radius: 16; color: Ui.Theme.card
-                    // FLstyle 分段器范式：白色容器卡，段各自有胶囊底
                 }
                 Repeater {
                     // 下标即 Glyphs 图标种类：0=Dot 今天 1=Grid 课表 2=Doc 作业 3=Pulse 动态
@@ -292,12 +302,12 @@ Window {
                         x: index * (tabBar.width / 4)
                         width: tabBar.width / 4; height: 40
                         readonly property bool sel: card.tab === index
-                        // 选中段：实心主色全圆胶囊；迁移 = 颜色原位渐变（150~250ms）
+                        // 选中迁移 = 颜色原位渐变（150~250ms）
                         Rectangle {
                             anchors.centerIn: parent
-                            width: parent.width - 8; height: 24
-                            radius: 12
-                            color: sel ? Ui.Theme.primary : Ui.Theme.track
+                            width: parent.width - 8; height: 26
+                            radius: 13
+                            color: sel ? Ui.Theme.primary : Ui.Theme.page
                             Behavior on color { ColorAnimation { duration: Ui.Theme.durSeg } }
                         }
                         Row {
@@ -332,11 +342,12 @@ Window {
                 }
             }
 
-            // ---- 页面容器（根级导航 = 硬切；页内入场只做透明度渐变，零位移） ----
+            // ---- 页面容器（根级导航 = 硬切；页内入场只做透明度渐变，零位移）----
+            // 高度给页脚留 32：列表滚到底不得贴着页脚文字（验收 #3）
             Item {
                 id: pages
                 y: 40; width: parent.width
-                height: parent.height - 40 - 26
+                height: parent.height - 40 - 32
                 clip: true
 
                 TodayPage {

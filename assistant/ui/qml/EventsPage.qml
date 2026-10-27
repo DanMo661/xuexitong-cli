@@ -34,14 +34,24 @@ Item {
             x: 12; width: parent.width - 24
             spacing: 4
 
-            // 分组标题（13px 灰）+ 右侧说明
+            // 分组标题（13px 灰、带小图标）+ 右侧说明
             Item {
                 width: parent.width; height: 26
-                Text {
+                Row {
                     anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
-                    text: "最近动态"
-                    color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
-                    font.family: Ui.Theme.fontFamily
+                    spacing: 6
+                    Glyphs {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 12; height: 12; thickness: 2
+                        kind: 3   // Pulse
+                        color: Ui.Theme.fg2
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "最近动态"
+                        color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
+                        font.family: Ui.Theme.fontFamily
+                    }
                 }
                 Text {
                     anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
@@ -64,7 +74,8 @@ Item {
                     Component.onCompleted: stagger.start()
                     SequentialAnimation {
                         id: stagger
-                        PauseAnimation { duration: index * 25 }
+                        // 封顶 8 个：20 条列表拖到 500ms+ 会"半场定格"（截图/快扫都踩过）
+                        PauseAnimation { duration: Math.min(index, 8) * 25 }
                         NumberAnimation { target: evItem; property: "opacity"; to: 1; duration: 160 }
                     }
 
@@ -141,13 +152,21 @@ Item {
                                     font.family: Ui.Theme.fontFamily
                                     elide: Text.ElideRight
                                 }
-                                // 附加信息行：出分"得分 92 / 满分 100"、
-                                // 考试"10-12 14:00 开考 · 120分钟"——主色点睛
+                                // 附加信息行：短值（出分/开考）主色点睛，长文回灰。
+                                // detail 可能是带换行的通知正文——必须压成单行再
+                                // elide（elide 只截行宽不截行数，多行会把卡片
+                                // 撑爆溢出、从后面卡片的间隙里漏出来）
                                 Text {
                                     visible: evItem.hasDetail
                                     width: parent.width
-                                    text: modelData.detail
-                                    color: Ui.Theme.primary; font.pixelSize: Ui.Theme.fsCap
+                                    text: {
+                                        const s = (modelData.detail || "")
+                                            .replace(/\s+/g, " ").trim()
+                                        return s
+                                    }
+                                    color: text.length <= 16
+                                           ? Ui.Theme.primary : Ui.Theme.fg2
+                                    font.pixelSize: Ui.Theme.fsCap
                                     font.weight: Font.Medium
                                     font.family: Ui.Theme.fontFamily
                                     elide: Text.ElideRight

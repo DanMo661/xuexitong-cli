@@ -10,7 +10,7 @@ import "." as Ui
 Item {
     id: g
 
-    // 图标种类（调用方用数字常量：0=dot 1=grid 2=doc 3=pulse 4=clock 5=bell 6=sliders 7=check 8=list）
+    // 图标种类（调用方用数字常量：0=dot 1=grid 2=doc 3=pulse 4=clock 5=bell 6=sliders 7=check 8=list 9=cap 10=pin）
     readonly property int kindDot: 0      // 今天：实心圆
     readonly property int kindGrid: 1     // 课表：2×2 方格
     readonly property int kindDoc: 2      // 作业：三行文本条
@@ -20,6 +20,9 @@ Item {
     readonly property int kindSliders: 6  // 设置：三档滑杆
     readonly property int kindCheck: 7    // 完成：对勾
     readonly property int kindList: 8     // 通知：圆点列表（点+行×2，与表盘拉开区分）
+    readonly property int kindCap: 9      // 学仕帽（品牌 glyph：45°菱形板+帽檐+流苏点）
+    readonly property int kindPin: 10     // 图钉（标题栏置顶钮：圆头+斜杆）
+    readonly property int kindMail: 11    // 信封（邮件提醒：方框描边+V 形封口）
 
     property int kind: 0   // 默认 kindDot（"Dot" 不是合法标识符，写 0 防 ReferenceError）
     property color color: Ui.Theme.fg2
@@ -190,6 +193,86 @@ Item {
             radius: g.thickness / 2; color: g.color
             transformOrigin: Item.Left
             rotation: -45
+        }
+    }
+
+    // ---- 学仕帽（品牌 glyph）：45° 菱形帽板 + 横帽檐 + 中心流苏点 ----
+    Item {
+        visible: g.kind === g.kindCap
+        anchors.centerIn: parent
+        width: g.width; height: g.height
+        // 帽板：正方形旋转 45°（对角线 = width）
+        Rectangle {
+            anchors.centerIn: parent
+            y: parent.height * 0.08
+            width: g.width * 0.66; height: g.width * 0.66
+            radius: 1; color: g.color
+            rotation: 45
+        }
+        // 帽檐：板下一条横向圆角短杆
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: parent.height * 0.62 - g.thickness / 2
+            width: g.width * 0.72; height: g.thickness
+            radius: g.thickness / 2; color: g.color
+        }
+        // 流苏：帽板中心一颗小点
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: parent.height * 0.40
+            width: g.thickness * 0.9; height: g.thickness * 0.9
+            radius: g.thickness * 0.45; color: g.color
+        }
+    }
+
+    // ---- 图钉（标题栏置顶钮）：圆头 + 左斜杆 ----
+    Item {
+        visible: g.kind === g.kindPin
+        anchors.centerIn: parent
+        width: g.width; height: g.height
+        // 杆：从左下到中上（绕底端旋转的竖杆）
+        Rectangle {
+            x: parent.width * 0.30
+            y: parent.height * 0.30
+            width: g.thickness * 0.9; height: parent.height * 0.52
+            radius: g.thickness * 0.45; color: g.color
+            transformOrigin: Item.Bottom
+            rotation: 45
+        }
+        // 头：右上实心圆
+        Rectangle {
+            x: parent.width * 0.42; y: parent.height * 0.10
+            width: parent.width * 0.48; height: parent.width * 0.48
+            radius: width / 2; color: g.color
+        }
+    }
+
+    // ---- 信封：圆角方框描边 + 两侧下斜的 V 形封口 ----
+    Item {
+        visible: g.kind === g.kindMail
+        anchors.centerIn: parent
+        width: g.width; height: g.height * 0.8
+        Rectangle {
+            anchors.fill: parent
+            radius: 1.5
+            color: "transparent"
+            border.width: g.thickness * 0.8; border.color: g.color
+        }
+        // 左翼：从左上往中下斜（绕左端 -35°）
+        Rectangle {
+            x: 1; y: g.height * 0.14
+            width: g.width * 0.52; height: g.thickness * 0.8
+            radius: g.thickness * 0.4; color: g.color
+            transformOrigin: Item.Left
+            rotation: 32
+        }
+        // 右翼：从右上往中下斜（绕右端 -32°）
+        Rectangle {
+            x: g.width * 0.48 - 1; y: g.height * 0.14
+            width: g.width * 0.52; height: g.thickness * 0.8
+            radius: g.thickness * 0.4; color: g.color
+            transformOrigin: Item.Right
+            rotation: -32
         }
     }
 }

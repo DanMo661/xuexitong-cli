@@ -61,14 +61,27 @@ Item {
                 }
             }
 
-            // ---- 今日概览条（轨色信息条；数字用主文字色跳出来）----
+            // ---- 今日概览（白卡行：图标井 + 数字主文字跳出）----
             Rectangle {
                 visible: Bridge.dayTotal > 0 || Bridge.progressLeft > 0
-                width: parent.width; height: 32; radius: Ui.Theme.radiusSm
-                color: Ui.Theme.track
+                width: parent.width; height: 40; radius: Ui.Theme.radiusMd
+                color: "#FFFFFF"
                 Row {
-                    anchors.centerIn: parent
-                    spacing: 3
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left; anchors.leftMargin: 10
+                    spacing: 8
+                    // 图标井：中性井底 + 主色图形
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 24; height: 24; radius: 7
+                        color: Ui.Theme.well
+                        Glyphs {
+                            anchors.centerIn: parent
+                            width: 12; height: 12; thickness: 2
+                            kind: Bridge.dayTotal > 0 ? 1 : 3   // 有课=网格 / 纯任务点=脉冲
+                            color: Ui.Theme.primary
+                        }
+                    }
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
                         text: Bridge.dayTotal > 0 ? "今天" : "任务点"
@@ -79,7 +92,7 @@ Item {
                         visible: Bridge.dayTotal > 0
                         anchors.verticalCenter: parent.verticalCenter
                         text: Bridge.dayTotal
-                        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsSub
+                        color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsTitle
                         font.weight: Font.DemiBold
                         font.family: Ui.Theme.fontFamily
                         font.features: { "tnum": 1 }
@@ -120,12 +133,12 @@ Item {
                             easing.bezierCurve: Ui.Theme.popBack
                         }
                     }
-                    // 入场 stagger（只做透明度，零位移）
+                    // 入场 stagger（只做透明度，零位移；封顶防长列表半场定格）
                     opacity: 0
                     Component.onCompleted: stagger.start()
                     SequentialAnimation {
                         id: stagger
-                        PauseAnimation { duration: index * 35 }
+                        PauseAnimation { duration: Math.min(index, 8) * 35 }
                         NumberAnimation { target: lessonItem; property: "opacity"; to: 1; duration: 180 }
                     }
 
@@ -167,21 +180,21 @@ Item {
                         Row {
                             anchors.fill: parent
                             anchors.leftMargin: 9; anchors.rightMargin: 8
-                            spacing: 10
+                            spacing: 9
 
-                            // 课程色块：永远用课程身份色（与课表页一致）——
-                            // "已结束就把色块变灰"会让整页傍晚全灰、和课表
+                            // 课程色徽章：永远用课程身份色（与课表页一致）——
+                            // "已结束就把徽章变灰"会让整页傍晚全灰、和课表
                             // 对不上色；结束态交给徽章和标题变淡表达
                             Rectangle {
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 36; height: 36; radius: 10
+                                width: 30; height: 30; radius: 8
                                 color: modelData.cbg || Ui.Theme.track
                                 opacity: 1   // 两窗色值必须一致，已结束不淡化色块
                                 Text {
                                     anchors.centerIn: parent
                                     text: modelData.name.length > 0 ? modelData.name[0] : "?"
                                     color: modelData.cfg || Ui.Theme.fg2
-                                    font.pixelSize: 15; font.bold: true
+                                    font.pixelSize: 13; font.bold: true
                                     font.family: Ui.Theme.fontFamily
                                 }
                             }
@@ -190,7 +203,7 @@ Item {
                             Column {
                                 anchors.verticalCenter: parent.verticalCenter
                                 spacing: 2
-                                width: parent.width - 36 - chip.width - chev.width - 40
+                                width: parent.width - 30 - chip.width - chev.width - 36
                                 Text {
                                     width: parent.width
                                     text: modelData.name
@@ -246,7 +259,7 @@ Item {
 
                     // 展开详情（老师/节次/周次）
                     Item {
-                        x: 55; y: 54; width: parent.width - 70; height: 26
+                        x: 48; y: 54; width: parent.width - 62; height: 26
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             text: [modelData.teacher, modelData.nodeLabel,
@@ -377,21 +390,21 @@ Item {
                     radius: 1.5
                     color: Bridge.examOngoing ? Ui.Theme.danger : Ui.Theme.warn
                 }
-                // 考试图标井（与课程色块同规格；进行中红/平时暖色）
+                // 考试图标井（进行中红/平时暖色；表盘 glyph 替代"考"字）
                 Rectangle {
-                    x: 16; anchors.verticalCenter: parent.verticalCenter
-                    width: 30; height: 30; radius: 9
+                    x: 14; anchors.verticalCenter: parent.verticalCenter
+                    width: 28; height: 28; radius: 8
                     color: Bridge.examOngoing ? Ui.Theme.dangerSoft : Ui.Theme.warnSoft
-                    Text {
-                        anchors.centerIn: parent; text: "考"
+                    Glyphs {
+                        anchors.centerIn: parent
+                        width: 14; height: 14; thickness: 2.2
+                        kind: 4   // Clock
                         color: Bridge.examOngoing ? Ui.Theme.danger : Ui.Theme.warn
-                        font.pixelSize: Ui.Theme.fsTitle; font.bold: true
-                        font.family: Ui.Theme.fontFamily
                     }
                 }
                 Column {
-                    x: 54; anchors.verticalCenter: parent.verticalCenter; spacing: 2
-                    width: parent.width - 54 - examChip.width - 26
+                    x: 50; anchors.verticalCenter: parent.verticalCenter; spacing: 2
+                    width: parent.width - 50 - examChip.width - 24
                     Text {
                         width: parent.width
                         text: Bridge.examSummary

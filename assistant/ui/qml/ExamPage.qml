@@ -26,14 +26,24 @@ Item {
             id: col
             width: parent.width; spacing: 8
 
-            // ---- 考试列表头（分组标题 13px 灰）----
+            // ---- 考试列表头（分组标题 13px 灰、带小图标）----
             Item {
                 width: parent.width; height: 26
-                Text {
+                Row {
                     anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
-                    text: "考试安排"
-                    color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
-                    font.family: Ui.Theme.fontFamily
+                    spacing: 6
+                    Glyphs {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 12; height: 12; thickness: 2
+                        kind: 4   // Clock
+                        color: Ui.Theme.fg2
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "考试安排"
+                        color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
+                        font.family: Ui.Theme.fontFamily
+                    }
                 }
                 Rectangle {
                     anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
@@ -174,11 +184,21 @@ Item {
             // ---- 任务点完成度 ----
             Item {
                 width: parent.width; height: 30
-                Text {
+                Row {
                     anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
-                    text: "任务点完成度"
-                    color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
-                    font.family: Ui.Theme.fontFamily
+                    spacing: 6
+                    Glyphs {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 12; height: 12; thickness: 2
+                        kind: 3   // Pulse
+                        color: Ui.Theme.fg2
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "任务点完成度"
+                        color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
+                        font.family: Ui.Theme.fontFamily
+                    }
                 }
                 // 刷新 = 图标井：中性井底 + 强调色图形
                 Rectangle {
@@ -271,7 +291,7 @@ Item {
                                     font.family: Ui.Theme.fontFamily
                                 }
                             }
-                            // 细进度条（轨 + 主色/成功填充）
+                            // 细进度条（轨 + 主色/成功填充；宽度值渐变）
                             Rectangle {
                                 visible: modelData.done != null && modelData.left > 0
                                 width: parent.width; height: 4; radius: 2
@@ -281,6 +301,13 @@ Item {
                                     height: parent.height; radius: 2
                                     color: modelData.left > 0 ? Ui.Theme.primary
                                            : Ui.Theme.ok
+                                    Behavior on width {
+                                        NumberAnimation {
+                                            duration: 240
+                                            easing.type: Easing.Bezier
+                                            easing.bezierCurve: Ui.Theme.ccEnter
+                                        }
+                                    }
                                 }
                             }
                         }

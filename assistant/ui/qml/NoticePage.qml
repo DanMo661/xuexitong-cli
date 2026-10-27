@@ -33,20 +33,30 @@ Item {
             id: col
             width: parent.width; spacing: 8
 
-            // ---- 头：分组标题 + 过滤分段器 ----
+            // ---- 头：分组标题（带小图标）+ 过滤分段器 ----
             Item {
                 width: parent.width; height: 28
-                Text {
+                Row {
                     anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
-                    text: "通知中心"
-                    color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
-                    font.family: Ui.Theme.fontFamily
+                    spacing: 6
+                    Glyphs {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 12; height: 12; thickness: 2
+                        kind: 8   // List
+                        color: Ui.Theme.fg2
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "通知中心"
+                        color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsTitle; font.weight: Font.Medium
+                        font.family: Ui.Theme.fontFamily
+                    }
                 }
-                // mini 分段（全部/未读）：灰轨 + 选中段实心主色胶囊，原位迁移
+                // mini 分段（全部/未读）：白容器 + 未选中段=页灰药丸 + 选中段实心主色
                 Rectangle {
                     anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                     width: 108; height: 24; radius: 12
-                    color: Ui.Theme.track
+                    color: Ui.Theme.card
                     Row {
                         anchors.fill: parent
                         Repeater {
@@ -57,7 +67,7 @@ Item {
                                 Rectangle {
                                     anchors.centerIn: parent
                                     width: 50; height: 20; radius: 10
-                                    color: sel ? Ui.Theme.primary : "transparent"
+                                    color: sel ? Ui.Theme.primary : Ui.Theme.page
                                     Behavior on color { ColorAnimation { duration: Ui.Theme.durSeg } }
                                 }
                                 Text {
@@ -112,13 +122,14 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: parent.width - 14
                                 text: modelData.title
-                                // 展开 = 选中态：主色文字，不画彩色边
-                                color: ncCard.expanded ? Ui.Theme.primary : Ui.Theme.fg
+                                // 标题恒深色（蓝色预算不占标题）；展开态用加粗+主色箭头表达
+                                color: Ui.Theme.fg
                                 font.pixelSize: Ui.Theme.fsBody
-                                font.weight: modelData.unread ? Font.DemiBold : Font.Medium
+                                font.weight: modelData.unread
+                                              ? Font.DemiBold
+                                              : ncCard.expanded ? Font.DemiBold : Font.Medium
                                 font.family: Ui.Theme.fontFamily
                                 elide: Text.ElideRight
-                                Behavior on color { ColorAnimation { duration: Ui.Theme.durFast } }
                             }
                             Text {
                                 anchors.right: parent.right
@@ -140,19 +151,23 @@ Item {
                         Text {
                             visible: !ncCard.expanded && modelData.content !== ""
                             width: parent.width
-                            text: modelData.content.replace(/\n/g, " ")
+                            // 预览压成单行：连续空白合并 + 去首尾 + URL 折叠成
+                            // 「链接」占位（长 URL 连排正文没法读，展开才给全）
+                            text: modelData.content
+                                  .replace(/https?:\/\/\S+/g, "链接")
+                                  .replace(/\s+/g, " ").trim()
                             color: Ui.Theme.fg2; font.pixelSize: Ui.Theme.fsCap
                             font.family: Ui.Theme.fontFamily
                             elide: Text.ElideRight
                         }
                     }
-                    // 展开的全文（换行保留）
+                    // 展开的全文（换行保留，仅去首尾空白）
                     Text {
                         id: bodyTxt
                         visible: ncCard.expanded
                         x: 26; width: parent.width - 38
                         y: titleCol.y + titleCol.height + 4
-                        text: modelData.content
+                        text: (modelData.content || "").trim()
                         color: Ui.Theme.fg; font.pixelSize: Ui.Theme.fsSub
                         font.family: Ui.Theme.fontFamily
                         wrapMode: Text.WrapAnywhere   // 长 URL 不断行会把整行撑出大空洞
@@ -185,7 +200,7 @@ Item {
                         Glyphs {
                             anchors.centerIn: parent
                             width: 14; height: 14; thickness: 2.4
-                            kind: 5   // Bell
+                            kind: 8   // List（与页头同图腾；Bell 与表盘 10px 下同形已弃用）
                             color: Ui.Theme.primary
                         }
                     }
